@@ -67,6 +67,14 @@ The Metal and HLSL shaders only compile on their own systems, so CI checks them 
 - Quads, monochrome, subpixel and polychrome sprites near the fade's top grow by the radius so the blur has room. Quads soften their edges by the radius; sprites average 16 atlas samples over a disc, and images weight those samples by their alpha. Shadows, underlines and paths only fade.
 - The WebGL decoders read the longer records, and the wgpu tests render the blur on quads and on both kinds of sprites.
 
+### Glass behind the window on Windows
+
+GPUI draws into a DirectComposition target on the window's HWND. It's created as the topmost target here, so an app can put a `Windows.UI.Composition` target of its own under it (a host backdrop brush clipped to rounded corners, for example) and GPUI still draws on top. Upstream creates it as the bottom one, which leaves no room below.
+
+### Shaders beside the program in debug builds
+
+Debug builds compile `shaders.hlsl` when the app opens, from the path the crate was built at. They now look for `shaders.hlsl` (and `alpha_correction.hlsl`) beside the program first, so a debug build made on another machine runs on Windows with the two files copied next to it. Release builds are unchanged: fxc compiles the shaders at build time.
+
 ## License
 
 Apache-2.0, like gpui-pre. Each crate keeps its `LICENSE-APACHE`, and every file changed here says so in its first lines.
