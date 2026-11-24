@@ -1,3 +1,4 @@
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 // todo("windows"): remove
 #![cfg_attr(windows, allow(dead_code))]
 
@@ -36,9 +37,23 @@ impl From<bool> for PaddedBool32 {
     }
 }
 
+/// Fades everything painted under it to transparent near the edges of `bounds`.
+///
+/// Each edge distance is how far from that edge the fade reaches; zero leaves
+/// the edge sharp. The renderers multiply each pixel's alpha by the fade.
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
+#[repr(C)]
+pub struct FadeMask {
+    /// The rectangle whose edges the fade is measured from.
+    pub bounds: Bounds<ScaledPixels>,
+    /// How far in from each edge the fade reaches.
+    pub edges: Edges<ScaledPixels>,
+}
+
 #[derive(Default)]
 #[expect(missing_docs)]
 pub struct Scene {
+    pub fade: FadeMask,
     pub(crate) paint_operations: Vec<PaintOperation>,
     primitive_bounds: BoundsTree<ScaledPixels>,
     layer_stack: Vec<DrawOrder>,
@@ -86,6 +101,11 @@ impl Scene {
 
     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
         let mut primitive = primitive.into();
+        primitive.set_fade(self.fade);
+        self.push_primitive(primitive);
+    }
+
+    fn push_primitive(&mut self, mut primitive: Primitive) {
         let clipped_bounds = primitive
             .bounds()
             .intersect(&primitive.content_mask().bounds);
@@ -138,10 +158,16 @@ impl Scene {
             .push(PaintOperation::Primitive(primitive));
     }
 
-    pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
+    pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene, painted_under: FadeMask) {
         for operation in &prev_scene.paint_operations[range] {
             match operation {
-                PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
+                PaintOperation::Primitive(primitive) => {
+                    let mut primitive = primitive.clone();
+                    if primitive.fade() == painted_under {
+                        primitive.set_fade(self.fade);
+                    }
+                    self.push_primitive(primitive);
+                }
                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
                 PaintOperation::EndLayer => self.pop_layer(),
             }
@@ -255,6 +281,32 @@ impl Primitive {
             Primitive::SubpixelSprite(sprite) => &sprite.content_mask,
             Primitive::PolychromeSprite(sprite) => &sprite.content_mask,
             Primitive::Surface(surface) => &surface.content_mask,
+        }
+    }
+
+    fn fade(&self) -> FadeMask {
+        match self {
+            Primitive::Shadow(shadow) => shadow.fade,
+            Primitive::Quad(quad) => quad.fade,
+            Primitive::Path(path) => path.fade,
+            Primitive::Underline(underline) => underline.fade,
+            Primitive::MonochromeSprite(sprite) => sprite.fade,
+            Primitive::SubpixelSprite(sprite) => sprite.fade,
+            Primitive::PolychromeSprite(sprite) => sprite.fade,
+            Primitive::Surface(_) => FadeMask::default(),
+        }
+    }
+
+    fn set_fade(&mut self, fade: FadeMask) {
+        match self {
+            Primitive::Shadow(shadow) => shadow.fade = fade,
+            Primitive::Quad(quad) => quad.fade = fade,
+            Primitive::Path(path) => path.fade = fade,
+            Primitive::Underline(underline) => underline.fade = fade,
+            Primitive::MonochromeSprite(sprite) => sprite.fade = fade,
+            Primitive::SubpixelSprite(sprite) => sprite.fade = fade,
+            Primitive::PolychromeSprite(sprite) => sprite.fade = fade,
+            Primitive::Surface(_) => {}
         }
     }
 }
@@ -541,6 +593,7 @@ pub struct Quad {
     pub border_color: Hsla,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
+    pub fade: FadeMask,
 }
 
 impl From<Quad> for Primitive {
@@ -560,6 +613,7 @@ pub struct Underline {
     pub color: Hsla,
     pub thickness: ScaledPixels,
     pub wavy: PaddedBool32,
+    pub fade: FadeMask,
 }
 
 impl From<Underline> for Primitive {
@@ -583,6 +637,7 @@ pub struct Shadow {
     /// 0 = drop shadow (rendered outside the element), 1 = inset shadow (rendered inside).
     pub inset: u32,
     pub pad: u32, // align to 8 bytes
+    pub fade: FadeMask,
 }
 
 impl From<Shadow> for Primitive {
@@ -716,6 +771,7 @@ pub struct MonochromeSprite {
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: Hsla,
     pub transformation: TransformationMatrix,
+    pub fade: FadeMask,
 }
 
 impl From<MonochromeSprite> for Primitive {
@@ -735,6 +791,7 @@ pub struct SubpixelSprite {
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: Hsla,
     pub transformation: TransformationMatrix,
+    pub fade: FadeMask,
 }
 
 impl From<SubpixelSprite> for Primitive {
@@ -755,6 +812,7 @@ pub struct PolychromeSprite {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
+    pub fade: FadeMask,
 }
 
 impl From<PolychromeSprite> for Primitive {
@@ -793,6 +851,7 @@ pub struct Path<P: Clone + Debug + Default + PartialEq> {
     pub content_mask: ContentMask<P>,
     pub vertices: Vec<PathVertex<P>>,
     pub color: Background,
+    pub fade: FadeMask,
     start: Point<P>,
     current: Point<P>,
     contour_count: usize,
@@ -813,6 +872,7 @@ impl Path<Pixels> {
             },
             content_mask: Default::default(),
             color: Default::default(),
+            fade: FadeMask::default(),
             contour_count: 0,
         }
     }
@@ -833,6 +893,7 @@ impl Path<Pixels> {
             current: self.current.scale(factor),
             contour_count: self.contour_count,
             color: self.color,
+            fade: self.fade,
         }
     }
 
@@ -945,5 +1006,87 @@ impl PathVertex<Pixels> {
             st_position: self.st_position,
             content_mask: self.content_mask.scale(factor),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn square(origin: f32, side: f32) -> Bounds<ScaledPixels> {
+        Bounds {
+            origin: point(ScaledPixels(origin), ScaledPixels(origin)),
+            size: Size {
+                width: ScaledPixels(side),
+                height: ScaledPixels(side),
+            },
+        }
+    }
+
+    fn quad() -> Quad {
+        let bounds = square(0., 10.);
+        Quad {
+            bounds,
+            content_mask: ContentMask { bounds },
+            ..Quad::default()
+        }
+    }
+
+    fn fade_toward_bottom(side: f32) -> FadeMask {
+        FadeMask {
+            bounds: square(0., side),
+            edges: Edges {
+                bottom: ScaledPixels(side / 4.),
+                ..Edges::default()
+            },
+        }
+    }
+
+    #[test]
+    fn inserted_primitives_take_the_fade_they_are_painted_under() {
+        let mut scene = Scene::default();
+        let fade = fade_toward_bottom(40.);
+        scene.fade = fade;
+        scene.insert_primitive(quad());
+        scene.fade = FadeMask::default();
+        scene.insert_primitive(quad());
+
+        assert_eq!(scene.quads[0].fade, fade);
+        assert_eq!(scene.quads[1].fade, FadeMask::default());
+    }
+
+    #[test]
+    fn replay_keeps_fades_painted_inside_the_replayed_range() {
+        let inner = fade_toward_bottom(40.);
+        let mut previous = Scene::default();
+        previous.fade = inner;
+        previous.insert_primitive(quad());
+        previous.fade = FadeMask::default();
+        previous.insert_primitive(quad());
+
+        let mut next = Scene::default();
+        next.replay(0..2, &previous, FadeMask::default());
+
+        assert_eq!(next.quads[0].fade, inner);
+        assert_eq!(next.quads[1].fade, FadeMask::default());
+    }
+
+    #[test]
+    fn replay_moves_primitives_from_the_old_outer_fade_to_the_current_one() {
+        let painted_under = fade_toward_bottom(40.);
+        let inner = fade_toward_bottom(20.);
+        let current = fade_toward_bottom(80.);
+        let mut previous = Scene::default();
+        previous.fade = painted_under;
+        previous.insert_primitive(quad());
+        previous.fade = inner;
+        previous.insert_primitive(quad());
+
+        let mut next = Scene::default();
+        next.fade = current;
+        next.replay(0..2, &previous, painted_under);
+
+        assert_eq!(next.quads[0].fade, current);
+        assert_eq!(next.quads[1].fade, inner);
     }
 }

@@ -1,3 +1,4 @@
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 use std::{
     slice,
     sync::{Arc, OnceLock},
@@ -641,6 +642,7 @@ impl DirectXRenderer {
                 st_position: v.st_position,
                 color: path.color,
                 bounds: path.clipped_bounds(),
+                fade: path.fade,
             }));
         }
 
@@ -1273,6 +1275,7 @@ struct PathRasterizationSprite {
     st_position: Point<f32>,
     color: Background,
     bounds: Bounds<ScaledPixels>,
+    fade: FadeMask,
 }
 
 #[derive(Clone, Copy)]

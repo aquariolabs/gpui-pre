@@ -1,6 +1,7 @@
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
-    DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
+    DefiniteLength, Display, Edges, Fill, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
     FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, Hsla, JustifyContent, Length,
     SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
     TextStyleRefinement, UnderlineStyle, WhiteSpace, px, relative, rems,
@@ -59,6 +60,33 @@ pub trait Styled: Sized {
     fn hidden(mut self) -> Self {
         self.style().display = Some(Display::None);
         self
+    }
+
+    /// Sets per-edge fade distances for content clipped by overflow.
+    ///
+    /// Content is faded to transparent over the given distance as it approaches
+    /// the corresponding clipped edge of this element, similar to a CSS
+    /// `mask-image: linear-gradient(...)`.
+    fn overflow_fade(mut self, fade: impl Into<Edges<AbsoluteLength>>) -> Self {
+        let fade = fade.into();
+        let overflow_fade = &mut self.style().overflow_fade;
+        overflow_fade.top = Some(fade.top);
+        overflow_fade.right = Some(fade.right);
+        overflow_fade.bottom = Some(fade.bottom);
+        overflow_fade.left = Some(fade.left);
+        self
+    }
+
+    /// Sets equal fade distances on the left and right overflow edges,
+    /// clearing any fade on the top and bottom edges.
+    fn overflow_fade_x(self, fade: impl Into<AbsoluteLength>) -> Self {
+        self.overflow_fade(Edges::horizontal(fade.into()))
+    }
+
+    /// Sets equal fade distances on the top and bottom overflow edges,
+    /// clearing any fade on the left and right edges.
+    fn overflow_fade_y(self, fade: impl Into<AbsoluteLength>) -> Self {
+        self.overflow_fade(Edges::vertical(fade.into()))
     }
 
     /// Set the space to be reserved for rendering the scrollbar.

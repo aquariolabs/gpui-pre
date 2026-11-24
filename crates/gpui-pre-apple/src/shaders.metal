@@ -1,3 +1,4 @@
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 #include <metal_stdlib>
 #include <simd/simd.h>
 
@@ -36,6 +37,25 @@ float4 over(float4 below, float4 above);
 float radians(float degrees);
 float4 fill_color(Background background, float2 position, Bounds_ScaledPixels bounds,
   float4 solid_color, float4 color0, float4 color1);
+
+float fade_alpha(float2 position, FadeMask fade) {
+  float alpha = 1.0;
+  float2 origin = float2(fade.bounds.origin.x, fade.bounds.origin.y);
+  float2 far_corner = origin + float2(fade.bounds.size.width, fade.bounds.size.height);
+  if (fade.edges.top > 0.0) {
+    alpha *= saturate((position.y - origin.y) / fade.edges.top);
+  }
+  if (fade.edges.bottom > 0.0) {
+    alpha *= saturate((far_corner.y - position.y) / fade.edges.bottom);
+  }
+  if (fade.edges.left > 0.0) {
+    alpha *= saturate((position.x - origin.x) / fade.edges.left);
+  }
+  if (fade.edges.right > 0.0) {
+    alpha *= saturate((far_corner.x - position.x) / fade.edges.right);
+  }
+  return alpha;
+}
 
 struct GradientColor {
   float4 solid;
@@ -101,6 +121,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                               constant Quad *quads
                               [[buffer(QuadInputIndex_Quads)]]) {
   Quad quad = quads[input.quad_id];
+  float fade = fade_alpha(input.position.xy, quad.fade);
   float4 background_color = fill_color(quad.background, input.position.xy, quad.bounds,
     input.background_solid, input.background_color0, input.background_color1);
 
@@ -115,7 +136,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
       quad.border_widths.right == 0.0 &&
       quad.border_widths.bottom == 0.0 &&
       unrounded) {
-    return background_color;
+    return background_color * float4(1.0, 1.0, 1.0, fade);
   }
 
   float2 size = float2(quad.bounds.size.width, quad.bounds.size.height);
@@ -175,7 +196,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
 
   // Fast path for points that must be part of the background
   if (is_within_inner_straight_border && !is_near_rounded_corner) {
-    return background_color;
+    return background_color * float4(1.0, 1.0, 1.0, fade);
   }
 
   // Signed distance of the point to the outside edge of the quad's border
@@ -393,7 +414,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                 saturate(antialias_threshold - inner_sdf));
   }
 
-  return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf));
+  return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf) * fade);
 }
 
 // Returns the dash velocity of a corner given the dash velocity of the two
@@ -551,7 +572,7 @@ fragment float4 shadow_fragment(ShadowFragmentInput input [[stage_in]],
     alpha *= saturate(0.5 - element_distance);
   }
 
-  return input.color * float4(1., 1., 1., alpha);
+  return input.color * float4(1., 1., 1., alpha * fade_alpha(input.position.xy, shadow.fade));
 }
 
 struct UnderlineVertexOutput {
@@ -594,6 +615,7 @@ fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
   const float WAVE_HEIGHT_RATIO = 0.8;
 
   Underline underline = underlines[input.underline_id];
+  float fade = fade_alpha(input.position.xy, underline.fade);
   if (underline.wavy) {
     float half_thickness = underline.thickness * 0.5;
     float2 origin =
@@ -612,9 +634,9 @@ fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
     float distance_from_bottom_border = distance_in_pixels + half_thickness;
     float alpha = saturate(
         0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-    return input.color * float4(1., 1., 1., alpha);
+    return input.color * float4(1., 1., 1., alpha * fade);
   } else {
-    return input.color;
+    return input.color * float4(1., 1., 1., fade);
   }
 }
 
@@ -623,6 +645,7 @@ struct MonochromeSpriteVertexOutput {
   float2 tile_position;
   float4 color [[flat]];
   float4 clip_distance;
+  uint sprite_id [[flat]];
 };
 
 struct MonochromeSpriteFragmentInput {
@@ -630,6 +653,7 @@ struct MonochromeSpriteFragmentInput {
   float2 tile_position;
   float4 color [[flat]];
   float4 clip_distance;
+  uint sprite_id [[flat]];
 };
 
 vertex MonochromeSpriteVertexOutput monochrome_sprite_vertex(
@@ -652,7 +676,8 @@ vertex MonochromeSpriteVertexOutput monochrome_sprite_vertex(
       device_position,
       tile_position,
       color,
-      {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+      {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w},
+      sprite_id};
 }
 
 fragment float4 monochrome_sprite_fragment(
@@ -668,7 +693,7 @@ fragment float4 monochrome_sprite_fragment(
   float4 sample =
       atlas_texture.sample(atlas_texture_sampler, input.tile_position);
   float4 color = input.color;
-  color.a *= sample.a;
+  color.a *= sample.a * fade_alpha(input.position.xy, sprites[input.sprite_id].fade);
   return color;
 }
 
@@ -727,7 +752,8 @@ fragment float4 polychrome_sprite_fragment(
     color.g = grayscale;
     color.b = grayscale;
   }
-  color.a *= sprite.opacity * saturate(0.5 - distance);
+  color.a *= sprite.opacity * saturate(0.5 - distance) *
+             fade_alpha(input.position.xy, sprite.fade);
   return color;
 }
 
@@ -791,6 +817,7 @@ fragment float4 path_rasterization_fragment(
     float distance = f / length(gradient);
     alpha = saturate(0.5 - distance);
   }
+  alpha *= fade_alpha(input.position.xy, v.fade);
 
   GradientColor gradient_color = prepare_fill_color(
     background.tag,

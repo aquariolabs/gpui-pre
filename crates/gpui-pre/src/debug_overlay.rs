@@ -1,3 +1,4 @@
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 //! A developer overlay that paints frame-time statistics directly into the
 //! scene, bypassing layout, text, and view invalidation entirely (to avoid
 //! infinitely triggering new frames).
@@ -221,6 +222,7 @@ fn solid_quad(
         border_style: BorderStyle::Solid,
         bounds,
         content_mask: *content_mask,
+        fade: crate::FadeMask::default(),
         background: color.into(),
         border_color: transparent_black(),
         corner_radii: Corners::default(),

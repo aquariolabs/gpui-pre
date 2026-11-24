@@ -1,0 +1,11 @@
+[package]
+name = "util_macros"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Stands in for zed's util_macros, so gpui-pre's own tests build outside the zed repository"
+license = "Apache-2.0"
+
+[lib]
+proc-macro = true
+path = "src/util_macros.rs"

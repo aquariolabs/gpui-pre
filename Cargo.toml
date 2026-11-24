@@ -1,0 +1,9 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[patch.crates-io]
+gpui-pre = { path = "crates/gpui-pre" }
+gpui-pre-apple = { path = "crates/gpui-pre-apple" }
+gpui-pre-wgpu = { path = "crates/gpui-pre-wgpu" }
+gpui-pre-windows = { path = "crates/gpui-pre-windows" }

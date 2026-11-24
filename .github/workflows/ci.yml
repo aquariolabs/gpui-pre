@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  ZED_COMMIT: d2a4fb6ded7c470be25d1541281da3882495b65b
+
+jobs:
+  linux:
+    name: Tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      # The wgpu tests draw on a Vulkan device: lavapipe, Mesa's software one.
+      - name: Install a software Vulkan driver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libvulkan1 mesa-vulkan-drivers
+
+      # The tests embed Zed's fonts from the snapshot gpui-pre was made from.
+      - name: Download Zed's fonts
+        run: |
+          base="https://raw.githubusercontent.com/zed-industries/zed/$ZED_COMMIT/assets/fonts"
+          for font in lilex/Lilex-Regular.ttf lilex/Lilex-Bold.ttf ibm-plex-sans/IBMPlexSans-Regular.ttf; do
+            curl -fsSL --retry 3 --create-dirs -o "assets/fonts/$font" "$base/$font"
+          done
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: gpui-pre
+        run: cargo test -p gpui-pre --features test-support --tests
+
+      - name: gpui-pre-wgpu
+        run: cargo test -p gpui-pre-wgpu --features test-support
+
+  macos:
+    name: Metal shaders (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Recent Xcode versions download the Metal compiler separately.
+      - name: Install the Metal compiler
+        run: xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # Without `runtime_shaders`, the build script compiles the shaders.
+      - name: Compile the shaders
+        run: cargo check -p gpui-pre-apple
+
+  windows:
+    name: HLSL shaders (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # The build script runs fxc only in release builds.
+      - name: Compile the shaders
+        run: cargo check --release -p gpui-pre-windows

@@ -1,11 +1,12 @@
 // Modified for gpui-pre (snapshot of zed@d2a4fb6): adapt device queues and sRGB detection to wgpu 30.0.1.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 use crate::{CompositorGpuHint, DeviceErrorState, WgpuAtlas, WgpuContext};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
 use collections::FxHashMap;
 use gpui::{
-    AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, Path, Point, PrimitiveBatch,
-    ScaledPixels, Scene, Size, get_gamma_correction_ratios,
+    AtlasTextureId, Background, Bounds, DevicePixels, FadeMask, GpuSpecs, Path, Point,
+    PrimitiveBatch, ScaledPixels, Scene, Size, get_gamma_correction_ratios,
 };
 use log::warn;
 #[cfg(not(target_family = "wasm"))]
@@ -110,6 +111,7 @@ struct PathRasterizationVertex {
     st_position: Point<f32>,
     color: Background,
     bounds: Bounds<ScaledPixels>,
+    fade: FadeMask,
 }
 
 pub struct WgpuSurfaceConfig {
@@ -1872,6 +1874,7 @@ impl WgpuRendererCore {
                 st_position: v.st_position,
                 color: path.color,
                 bounds,
+                fade: path.fade,
             }));
         }
 
@@ -2644,13 +2647,18 @@ impl RenderingParameters {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use gpui::{
+        AtlasKey, DevicePixels, FontId, GlyphId, ImageId, PlatformHeadlessRenderer,
+        RenderGlyphParams, RenderImageParams, Scene, TransformationMatrix, point, px,
+    };
     use gpui::{
         BorderStyle, ColorSpace, ContentMask, Corners, Edges, Hsla, MonochromeSprite,
         PolychromeSprite, Quad, Shadow, Size, SubpixelSprite, Underline, linear_color_stop,
         linear_gradient,
     };
     #[cfg(target_os = "linux")]
-    use gpui::{DevicePixels, PlatformHeadlessRenderer, Scene};
+    use std::borrow::Cow;
 
     #[cfg(target_os = "linux")]
     fn device_size(width: i32, height: i32) -> Size<DevicePixels> {
@@ -2681,6 +2689,7 @@ mod tests {
             border_color: color,
             corner_radii: Corners::default(),
             border_widths: Edges::default(),
+            fade: FadeMask::default(),
         }
     }
 
@@ -2802,6 +2811,229 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
+    const FADED_SIZE: f32 = 64.0;
+
+    #[cfg(target_os = "linux")]
+    fn faded_bounds() -> Bounds<ScaledPixels> {
+        Bounds {
+            origin: Point::default(),
+            size: Size {
+                width: FADED_SIZE.into(),
+                height: FADED_SIZE.into(),
+            },
+        }
+    }
+
+    /// Renders `primitive` over the whole 64 px square under a fade that reaches 32 px
+    /// up from the square's bottom edge.
+    #[cfg(target_os = "linux")]
+    fn render_faded(
+        renderer: &mut WgpuHeadlessRenderer,
+        primitive: impl Into<gpui::Primitive>,
+    ) -> anyhow::Result<image::RgbaImage> {
+        let mut scene = Scene::default();
+        scene.fade = FadeMask {
+            bounds: faded_bounds(),
+            edges: Edges {
+                bottom: (FADED_SIZE / 2.0).into(),
+                ..Edges::default()
+            },
+        };
+        scene.insert_primitive(primitive);
+        scene.fade = FadeMask::default();
+        scene.finish();
+        renderer.render_scene_to_image(&scene, device_size(FADED_SIZE as i32, FADED_SIZE as i32))
+    }
+
+    /// Over the black clear color, each row keeps the share of red the fade leaves at
+    /// its center: all of it above the fade, then (64 - y - 0.5) / 32 of it.
+    #[cfg(target_os = "linux")]
+    fn assert_faded_toward_bottom(image: &image::RgbaImage) {
+        for x in [1, 32, 62] {
+            assert_pixel(image, x, 0, RED);
+            assert_pixel(image, x, 31, RED);
+            assert_pixel(image, x, 40, [187, 0, 0, 255]);
+            assert_pixel(image, x, 48, [124, 0, 0, 255]);
+            assert_pixel(image, x, 56, [60, 0, 0, 255]);
+            assert_pixel(image, x, 63, [4, 0, 0, 255]);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_fades_quads() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let quad = solid_quad(0.0, 0.0, FADED_SIZE, FADED_SIZE, gpui::red());
+        assert_faded_toward_bottom(&render_faded(&mut renderer, quad)?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_fades_shadows() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let bounds = faded_bounds();
+        let shadow = Shadow {
+            order: 0,
+            blur_radius: 0.0.into(),
+            bounds,
+            corner_radii: Corners::default(),
+            content_mask: ContentMask { bounds },
+            color: gpui::red(),
+            element_bounds: bounds,
+            element_corner_radii: Corners::default(),
+            inset: 0,
+            pad: 0,
+            fade: FadeMask::default(),
+        };
+        assert_faded_toward_bottom(&render_faded(&mut renderer, shadow)?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_fades_underlines() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let bounds = faded_bounds();
+        let underline = Underline {
+            order: 0,
+            pad: 0,
+            bounds,
+            content_mask: ContentMask { bounds },
+            color: gpui::red(),
+            thickness: FADED_SIZE.into(),
+            wavy: false.into(),
+            fade: FadeMask::default(),
+        };
+        assert_faded_toward_bottom(&render_faded(&mut renderer, underline)?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_fades_paths() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let corner = |x: f32, y: f32| point(px(x), px(y));
+        let filled = (point(0., 1.), point(0., 1.), point(0., 1.));
+        let mut path = gpui::Path::new(corner(0., 0.));
+        path.push_triangle(
+            (
+                corner(0., 0.),
+                corner(FADED_SIZE, 0.),
+                corner(FADED_SIZE, FADED_SIZE),
+            ),
+            filled,
+        );
+        path.push_triangle(
+            (
+                corner(0., 0.),
+                corner(FADED_SIZE, FADED_SIZE),
+                corner(0., FADED_SIZE),
+            ),
+            filled,
+        );
+        path.color = gpui::red().into();
+        path.content_mask.bounds = path.bounds;
+        assert_faded_toward_bottom(&render_faded(&mut renderer, path.scale(1.0))?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_fades_monochrome_sprites() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let side = FADED_SIZE as i32;
+        let coverage = vec![u8::MAX; (side * side) as usize];
+        let tile = renderer
+            .sprite_atlas()
+            .get_or_insert_with(
+                AtlasKey::Glyph(RenderGlyphParams {
+                    font_id: FontId(0),
+                    glyph_id: GlyphId(0),
+                    font_size: px(FADED_SIZE),
+                    subpixel_variant: Point::default(),
+                    scale_factor: 1.0,
+                    is_emoji: false,
+                    subpixel_rendering: false,
+                    dilation: 0,
+                }),
+                &mut || {
+                    Ok(Some((
+                        device_size(side, side),
+                        Cow::Borrowed(coverage.as_slice()),
+                    )))
+                },
+            )?
+            .expect("the atlas should hold the coverage mask");
+        let bounds = faded_bounds();
+        let sprite = MonochromeSprite {
+            order: 0,
+            pad: 0,
+            tile,
+            bounds,
+            content_mask: ContentMask { bounds },
+            color: gpui::red(),
+            transformation: TransformationMatrix::unit(),
+            fade: FadeMask::default(),
+        };
+        assert_faded_toward_bottom(&render_faded(&mut renderer, sprite)?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_fades_polychrome_sprites() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let side = FADED_SIZE as i32;
+        let bgra_red = [0, 0, u8::MAX, u8::MAX];
+        let pixels = bgra_red.repeat((side * side) as usize);
+        let tile = renderer
+            .sprite_atlas()
+            .get_or_insert_with(
+                AtlasKey::Image(RenderImageParams {
+                    image_id: ImageId(0),
+                    frame_index: 0,
+                }),
+                &mut || {
+                    Ok(Some((
+                        device_size(side, side),
+                        Cow::Borrowed(pixels.as_slice()),
+                    )))
+                },
+            )?
+            .expect("the atlas should hold the image");
+        let bounds = faded_bounds();
+        let sprite = PolychromeSprite {
+            order: 0,
+            pad: 0,
+            tile,
+            grayscale: false.into(),
+            opacity: 1.0,
+            bounds,
+            content_mask: ContentMask { bounds },
+            corner_radii: Corners::default(),
+            fade: FadeMask::default(),
+        };
+        assert_faded_toward_bottom(&render_faded(&mut renderer, sprite)?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_leaves_primitives_outside_a_fade_whole() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let mut scene = Scene::default();
+        scene.insert_primitive(solid_quad(0.0, 0.0, FADED_SIZE, FADED_SIZE, gpui::red()));
+        scene.finish();
+
+        let image = renderer
+            .render_scene_to_image(&scene, device_size(FADED_SIZE as i32, FADED_SIZE as i32))?;
+        assert_pixel(&image, 32, 0, RED);
+        assert_pixel(&image, 32, 63, RED);
+        Ok(())
+    }
+
     #[test]
     fn webgl_shader_is_valid_wgsl_without_storage_buffers() {
         assert!(!WEBGL_SHADERS.contains("var<storage"));
@@ -2830,14 +3062,14 @@ mod tests {
 
     #[test]
     fn webgl_record_sizes_match_shader_word_strides() {
-        assert_eq!(std::mem::size_of::<Quad>(), 40 * 4);
-        assert_eq!(std::mem::size_of::<Shadow>(), 28 * 4);
-        assert_eq!(std::mem::size_of::<PathRasterizationVertex>(), 26 * 4);
+        assert_eq!(std::mem::size_of::<Quad>(), 48 * 4);
+        assert_eq!(std::mem::size_of::<Shadow>(), 36 * 4);
+        assert_eq!(std::mem::size_of::<PathRasterizationVertex>(), 34 * 4);
         assert_eq!(std::mem::size_of::<PathSprite>(), 4 * 4);
-        assert_eq!(std::mem::size_of::<Underline>(), 16 * 4);
-        assert_eq!(std::mem::size_of::<MonochromeSprite>(), 28 * 4);
-        assert_eq!(std::mem::size_of::<SubpixelSprite>(), 28 * 4);
-        assert_eq!(std::mem::size_of::<PolychromeSprite>(), 24 * 4);
+        assert_eq!(std::mem::size_of::<Underline>(), 24 * 4);
+        assert_eq!(std::mem::size_of::<MonochromeSprite>(), 36 * 4);
+        assert_eq!(std::mem::size_of::<SubpixelSprite>(), 36 * 4);
+        assert_eq!(std::mem::size_of::<PolychromeSprite>(), 32 * 4);
     }
 
     #[test]
@@ -2907,6 +3139,24 @@ mod tests {
                 bottom: 32.0.into(),
                 left: 33.0.into(),
             },
+            fade: FadeMask {
+                bounds: Bounds {
+                    origin: Point {
+                        x: 34.0.into(),
+                        y: 35.0.into(),
+                    },
+                    size: Size {
+                        width: 36.0.into(),
+                        height: 37.0.into(),
+                    },
+                },
+                edges: Edges {
+                    top: 38.0.into(),
+                    right: 39.0.into(),
+                    bottom: 40.0.into(),
+                    left: 41.0.into(),
+                },
+            },
         };
 
         let bytes = unsafe { WgpuRendererCore::instance_bytes(std::slice::from_ref(&quad)) };
@@ -2954,6 +3204,14 @@ mod tests {
                 31.0_f32.to_bits(),
                 32.0_f32.to_bits(),
                 33.0_f32.to_bits(),
+                34.0_f32.to_bits(),
+                35.0_f32.to_bits(),
+                36.0_f32.to_bits(),
+                37.0_f32.to_bits(),
+                38.0_f32.to_bits(),
+                39.0_f32.to_bits(),
+                40.0_f32.to_bits(),
+                41.0_f32.to_bits(),
             ]
         );
     }

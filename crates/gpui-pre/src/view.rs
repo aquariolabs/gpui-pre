@@ -1,3 +1,4 @@
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 use crate::{
     AnyElement, AnyEntity, AnyWeakEntity, App, AvailableSpace, Bounds, ContentMask, Context,
     Element, ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement,
@@ -334,6 +335,7 @@ struct ViewElementCacheKey {
     content_mask: ContentMask<Pixels>,
     text_style: TextStyle,
     opacity: f32,
+    fade: crate::FadeMask,
 }
 
 #[cfg(not(gpui_hot_reload))]
@@ -590,6 +592,7 @@ fn prepaint_view(
                             content_mask,
                             text_style,
                             opacity,
+                            fade: crate::FadeMask::default(),
                         },
                     },
                 )
@@ -630,6 +633,7 @@ fn paint_view(
 
                     let paint_start = window.paint_index();
                     let opacity = window.element_opacity();
+                    let fade = window.next_frame.scene.fade;
 
                     // Prepaint can only predict the opacity paint applies: an ancestor's
                     // hover or drag-over style depends on this frame's hit test, which
@@ -644,12 +648,16 @@ fn paint_view(
                         window.refreshing = refreshing;
                         element_state.cache_key.opacity = opacity;
                     } else {
-                        window.reuse_paint(element_state.paint_range.clone());
+                        window.reuse_paint(
+                            element_state.paint_range.clone(),
+                            element_state.cache_key.fade,
+                        );
                         if element_state.cache_key.opacity.to_bits() != opacity.to_bits() {
                             window.request_animation_frame();
                         }
                     }
 
+                    element_state.cache_key.fade = fade;
                     let paint_end = window.paint_index();
                     element_state.paint_range = paint_start..paint_end;
 

@@ -1,3 +1,4 @@
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 /* Functions useful for debugging:
 
 // A heat map color for debugging (blue -> cyan -> green -> yellow -> red).
@@ -116,6 +117,13 @@ struct Edges {
     right: f32,
     bottom: f32,
     left: f32,
+}
+
+// Fades a primitive to transparent near the edges of `bounds`, over the
+// distances in `edges`. An edge of zero doesn't fade.
+struct FadeMask {
+    bounds: Bounds,
+    edges: Edges,
 }
 
 struct Hsla {
@@ -394,6 +402,38 @@ fn blend_color(color: vec4<f32>, alpha_factor: f32) -> vec4<f32> {
     return vec4<f32>(color.rgb * multiplier, alpha);
 }
 
+fn fade_alpha(position: vec2<f32>, fade: FadeMask) -> f32 {
+    var alpha = 1.0;
+    let origin = fade.bounds.origin;
+    let far_corner = origin + fade.bounds.size;
+    if (fade.edges.top > 0.0) {
+        alpha *= saturate((position.y - origin.y) / fade.edges.top);
+    }
+    if (fade.edges.bottom > 0.0) {
+        alpha *= saturate((far_corner.y - position.y) / fade.edges.bottom);
+    }
+    if (fade.edges.left > 0.0) {
+        alpha *= saturate((position.x - origin.x) / fade.edges.left);
+    }
+    if (fade.edges.right > 0.0) {
+        alpha *= saturate((far_corner.x - position.x) / fade.edges.right);
+    }
+    return alpha;
+}
+
+// Sprites without a per-fragment record lookup carry their fade in two flat
+// varyings: the bounds as (origin, size) and the edges as (top, right, bottom, left).
+fn fade_bounds_varying(fade: FadeMask) -> vec4<f32> {
+    return vec4<f32>(fade.bounds.origin, fade.bounds.size);
+}
+
+fn fade_edges_varying(fade: FadeMask) -> vec4<f32> {
+    return vec4<f32>(fade.edges.top, fade.edges.right, fade.edges.bottom, fade.edges.left);
+}
+
+fn fade_from_varyings(bounds: vec4<f32>, edges: vec4<f32>) -> FadeMask {
+    return FadeMask(Bounds(bounds.xy, bounds.zw), Edges(edges.x, edges.y, edges.z, edges.w));
+}
 
 struct GradientColor {
     solid: vec4<f32>,
@@ -525,6 +565,7 @@ struct Quad {
     border_color: Hsla,
     corner_radii: Corners,
     border_widths: Edges,
+    fade: FadeMask,
 }
 
 struct QuadVarying {
@@ -569,6 +610,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     }
 
     let quad = load_quad(input.quad_id);
+    let fade = fade_alpha(input.position.xy, quad.fade);
 
     let background_color = gradient_color(quad.background, input.position.xy, quad.bounds,
         input.background_solid, input.background_color0, input.background_color1);
@@ -584,7 +626,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
             quad.border_widths.right == 0.0 &&
             quad.border_widths.bottom == 0.0 &&
             unrounded) {
-        return blend_color(background_color, 1.0);
+        return blend_color(background_color, fade);
     }
 
     let size = quad.bounds.size;
@@ -650,7 +692,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // However, that might negatively impact performance in the case of
     // reasonable sizes for rounded corners.
     if (is_within_inner_straight_border && !is_near_rounded_corner) {
-        return blend_color(background_color, 1.0);
+        return blend_color(background_color, fade);
     }
 
     // Signed distance of the point to the outside edge of the quad's border. It
@@ -889,7 +931,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                     saturate(antialias_threshold - inner_sdf));
     }
 
-    return blend_color(color, saturate(antialias_threshold - outer_sdf));
+    return blend_color(color, saturate(antialias_threshold - outer_sdf) * fade);
 }
 
 // Returns the dash velocity of a corner given the dash velocity of the two
@@ -962,6 +1004,7 @@ struct Shadow {
     // 0 = drop shadow, 1 = inset shadow.
     inset: u32,
     pad: u32, // align to 8 bytes
+    fade: FadeMask,
 }
 
 struct ShadowVarying {
@@ -1042,7 +1085,7 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
         alpha *= saturate(0.5 - element_distance);
     }
 
-    return blend_color(input.color, alpha);
+    return blend_color(input.color, alpha * fade_alpha(input.position.xy, shadow.fade));
 }
 
 // --- path rasterization --- //
@@ -1052,6 +1095,7 @@ struct PathRasterizationVertex {
     st_position: vec2<f32>,
     color: Background,
     bounds: Bounds,
+    fade: FadeMask,
 }
 
 
@@ -1098,6 +1142,7 @@ fn fs_path_rasterization(input: PathRasterizationVarying) -> @location(0) vec4<f
         let distance = f / length(gradient);
         alpha = saturate(0.5 - distance);
     }
+    alpha *= fade_alpha(input.position.xy, v.fade);
     let prepared_gradient = prepare_gradient_color(
         background.tag,
         background.color_space,
@@ -1154,6 +1199,7 @@ struct Underline {
     color: Hsla,
     thickness: f32,
     wavy: u32,
+    fade: FadeMask,
 }
 
 
@@ -1189,9 +1235,10 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
     }
 
     let underline = load_underline(input.underline_id);
+    let fade = fade_alpha(input.position.xy, underline.fade);
     if (underline.wavy == 0u)
     {
-        return blend_color(input.color, input.color.a);
+        return blend_color(input.color, input.color.a * fade);
     }
 
     let half_thickness = underline.thickness * 0.5;
@@ -1207,7 +1254,7 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
     let distance_from_top_border = distance_in_pixels - half_thickness;
     let distance_from_bottom_border = distance_in_pixels + half_thickness;
     let alpha = saturate(0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-    return blend_color(input.color, alpha * input.color.a);
+    return blend_color(input.color, alpha * input.color.a * fade);
 }
 
 // --- monochrome sprites --- //
@@ -1220,6 +1267,7 @@ struct MonochromeSprite {
     content_mask: Bounds,
     color: Hsla,
     transformation: TransformationMatrix,
+    fade: FadeMask,
 }
 
 
@@ -1228,6 +1276,8 @@ struct MonoSpriteVarying {
     @location(0) tile_position: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
     @location(3) clip_distances: vec4<f32>,
+    @location(4) @interpolate(flat) fade_bounds: vec4<f32>,
+    @location(5) @interpolate(flat) fade_edges: vec4<f32>,
 }
 
 @vertex
@@ -1241,6 +1291,8 @@ fn vs_mono_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     out.tile_position = to_tile_position(unit_vertex, sprite.tile);
     out.color = hsla_to_rgba(sprite.color);
     out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
+    out.fade_bounds = fade_bounds_varying(sprite.fade);
+    out.fade_edges = fade_edges_varying(sprite.fade);
     return out;
 }
 
@@ -1254,7 +1306,8 @@ fn fs_mono_sprite(input: MonoSpriteVarying) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    return blend_color(input.color, alpha_corrected);
+    let fade = fade_alpha(input.position.xy, fade_from_varyings(input.fade_bounds, input.fade_edges));
+    return blend_color(input.color, alpha_corrected * fade);
 }
 
 // --- polychrome sprites --- //
@@ -1268,6 +1321,7 @@ struct PolychromeSprite {
     bounds: Bounds,
     content_mask: Bounds,
     corner_radii: Corners,
+    fade: FadeMask,
 }
 
 
@@ -1307,7 +1361,8 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
         let grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
         color = vec4<f32>(vec3<f32>(grayscale), sample.a);
     }
-    return blend_color(color, sprite.opacity * saturate(0.5 - distance));
+    let fade = fade_alpha(input.position.xy, sprite.fade);
+    return blend_color(color, sprite.opacity * saturate(0.5 - distance) * fade);
 }
 
 // --- surfaces --- //
