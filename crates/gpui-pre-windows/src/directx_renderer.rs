@@ -1,4 +1,5 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade; GPUI's
+// composition target is topmost; debug builds read shaders beside the program.
 use std::{
     slice,
     sync::{Arc, OnceLock},
@@ -1016,7 +1017,7 @@ impl DirectXRenderPipelines {
 impl DirectComposition {
     pub fn new(dxgi_device: &IDXGIDevice, hwnd: HWND) -> Result<Self> {
         let comp_device = get_comp_device(dxgi_device)?;
-        let comp_target = unsafe { comp_device.CreateTargetForHwnd(hwnd, false) }?;
+        let comp_target = unsafe { comp_device.CreateTargetForHwnd(hwnd, true) }?;
         let comp_visual = unsafe { comp_device.CreateVisual() }?;
 
         Ok(Self {
@@ -1819,9 +1820,16 @@ pub(crate) mod shader_resources {
 
             let mut compile_blob = None;
             let mut error_blob = None;
-            let shader_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("src/shaders.hlsl")
-                .canonicalize()?;
+            let beside_program = std::env::current_exe()
+                .ok()
+                .and_then(|program| program.parent().map(|dir| dir.join("shaders.hlsl")))
+                .filter(|path| path.exists());
+            let shader_path = match beside_program {
+                Some(path) => path,
+                None => std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("src/shaders.hlsl")
+                    .canonicalize()?,
+            };
 
             let entry_point = PCSTR::from_raw(entry.as_ptr());
             let target_cstr = PCSTR::from_raw(target.as_ptr());
