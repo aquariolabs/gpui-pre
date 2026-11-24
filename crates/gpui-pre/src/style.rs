@@ -1,3 +1,4 @@
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 use std::{
     hash::{Hash, Hasher},
     iter, mem,
@@ -188,6 +189,9 @@ pub struct Style {
     /// How children overflowing their container should affect layout
     #[refineable]
     pub overflow: Point<Overflow>,
+    /// How far in from each edge clipped by `overflow` the content fades to transparent.
+    #[refineable]
+    pub overflow_fade: Edges<AbsoluteLength>,
     /// How much space (in points) should be reserved for the scrollbars of `Overflow::Scroll` and `Overflow::Auto` nodes.
     pub scrollbar_width: AbsoluteLength,
     /// Whether both x and y axis should be scrollable at the same time.
@@ -684,6 +688,29 @@ impl Style {
         }
     }
 
+    /// The rectangle and edge distances over which content clipped by `overflow` fades
+    /// to transparent, or `None` when no clipped edge fades.
+    pub fn overflow_fade_mask(
+        &self,
+        bounds: Bounds<Pixels>,
+        rem_size: Pixels,
+    ) -> Option<(Bounds<Pixels>, Edges<Pixels>)> {
+        let mask = self.overflow_mask(bounds, rem_size)?;
+        let mut edges = self.overflow_fade.to_pixels(rem_size);
+        if self.overflow.x == Overflow::Visible {
+            edges.left = Pixels::ZERO;
+            edges.right = Pixels::ZERO;
+        }
+        if self.overflow.y == Overflow::Visible {
+            edges.top = Pixels::ZERO;
+            edges.bottom = Pixels::ZERO;
+        }
+        if edges == Edges::default() {
+            return None;
+        }
+        Some((mask.bounds, edges))
+    }
+
     /// Paints the background of an element styled with this style.
     pub fn paint(
         &self,
@@ -777,6 +804,7 @@ impl Default for Style {
                 x: Overflow::Visible,
                 y: Overflow::Visible,
             },
+            overflow_fade: Edges::default(),
             allow_concurrent_scroll: false,
             restrict_scroll_to_axis: false,
             scrollbar_width: AbsoluteLength::default(),
@@ -1330,11 +1358,58 @@ impl From<Position> for taffy::style::Position {
 
 #[cfg(test)]
 mod tests {
-    use crate::{blue, green, px, red, yellow};
+    use crate::{blue, green, px, red, rems, yellow};
 
     use super::*;
 
     use util_macros::perf;
+
+    #[test]
+    fn overflow_fade_reaches_only_the_clipped_axes() {
+        let bounds = Bounds::new(point(px(10.), px(20.)), size(px(100.), px(200.)));
+        let rem_size = px(16.);
+        let mut style = Style {
+            overflow_fade: Edges {
+                top: px(12.).into(),
+                right: px(8.).into(),
+                bottom: rems(2.).into(),
+                left: px(4.).into(),
+            },
+            ..Style::default()
+        };
+        assert_eq!(style.overflow_fade_mask(bounds, rem_size), None);
+
+        style.overflow.y = Overflow::Scroll;
+        assert_eq!(
+            style.overflow_fade_mask(bounds, rem_size),
+            Some((
+                bounds,
+                Edges {
+                    top: px(12.),
+                    right: px(0.),
+                    bottom: px(32.),
+                    left: px(0.),
+                },
+            ))
+        );
+
+        style.overflow.x = Overflow::Hidden;
+        assert_eq!(
+            style.overflow_fade_mask(bounds, rem_size),
+            Some((
+                bounds,
+                Edges {
+                    top: px(12.),
+                    right: px(8.),
+                    bottom: px(32.),
+                    left: px(4.),
+                },
+            ))
+        );
+
+        style.overflow_fade = Edges::default();
+        assert_eq!(style.overflow_fade_mask(bounds, rem_size), None);
+    }
 
     #[perf]
     fn test_basic_highlight_style_combination() {

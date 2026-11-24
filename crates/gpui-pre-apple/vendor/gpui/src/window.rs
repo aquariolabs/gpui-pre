@@ -1,3 +1,4 @@
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 #[cfg(feature = "profiler")]
 use crate::DebugFrameOverlayMode;
 #[cfg(any(feature = "inspector", debug_assertions))]
@@ -3512,6 +3513,7 @@ impl Window {
             pad: 0,
             bounds: self.underline_bounds(origin, width, style),
             content_mask: self.snapped_content_mask(),
+            fade: crate::FadeMask::default(),
             color: style
                 .color
                 .unwrap_or_default()
@@ -4214,7 +4216,10 @@ impl Window {
                 });
                 deferred_draw.accessed_entities.extend(accessed_entities);
             } else {
-                self.reuse_paint(deferred_draw.paint_range.clone());
+                self.reuse_paint(
+                    deferred_draw.paint_range.clone(),
+                    crate::FadeMask::default(),
+                );
             }
             let paint_end = self.paint_index();
             deferred_draw.paint_range = paint_start..paint_end;
@@ -4307,7 +4312,7 @@ impl Window {
         }
     }
 
-    pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
+    pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>, painted_under: crate::FadeMask) {
         // Cached elements still exist in the frame even when their paint methods don't run.
         #[cfg(any(test, feature = "test-support"))]
         for (selector, bounds) in &self.rendered_frame.debug_bounds_records
@@ -4350,6 +4355,7 @@ impl Window {
         self.next_frame.scene.replay(
             range.start.scene_index..range.end.scene_index,
             &self.rendered_frame.scene,
+            painted_under,
         );
     }
 
@@ -4424,6 +4430,42 @@ impl Window {
         } else {
             f(self)
         }
+    }
+
+    /// Runs `f` inside `mask`, like [`Window::with_content_mask`], and also under
+    /// [`Window::with_fade_mask`] when `fade` holds a rectangle and its edge distances.
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn with_content_and_fade_mask<R>(
+        &mut self,
+        mask: Option<ContentMask<Pixels>>,
+        fade: Option<(Bounds<Pixels>, Edges<Pixels>)>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.with_content_mask(mask, |window| match fade {
+            Some((bounds, edges)) => window.with_fade_mask(bounds, edges, f),
+            None => f(window),
+        })
+    }
+
+    /// Fades everything painted inside `f` to transparent near the edges of `bounds`,
+    /// over the distance given for each edge. This method should only be called as
+    /// part of the paint phase of element drawing.
+    pub fn with_fade_mask<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        edges: Edges<Pixels>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+        let scale = self.scale_factor();
+        let fade = crate::FadeMask {
+            bounds: bounds.scale(scale),
+            edges: edges.scale(scale),
+        };
+        let outer = std::mem::replace(&mut self.next_frame.scene.fade, fade);
+        let result = f(self);
+        self.next_frame.scene.fade = outer;
+        result
     }
 
     /// Updates the global element offset relative to the current offset. This is used to implement
@@ -4828,6 +4870,7 @@ impl Window {
                 blur_radius: shadow.blur_radius.scale(scale_factor),
                 bounds: self.cover_bounds(shadow_bounds),
                 content_mask,
+                fade: crate::FadeMask::default(),
                 corner_radii: corner_radii.scale(scale_factor),
                 color: shadow.color.opacity(opacity),
                 element_bounds,
@@ -4873,6 +4916,7 @@ impl Window {
                 blur_radius: shadow.blur_radius.scale(scale_factor),
                 bounds: self.cover_bounds(hole),
                 content_mask,
+                fade: crate::FadeMask::default(),
                 corner_radii: hole_corner_radii.scale(scale_factor),
                 color: shadow.color.opacity(opacity),
                 element_bounds,
@@ -4941,6 +4985,7 @@ impl Window {
             order: 0,
             bounds: snapped_bounds,
             content_mask: self.snapped_content_mask(),
+            fade: crate::FadeMask::default(),
             background: quad.background.opacity(opacity),
             border_color: quad.border_color.opacity(opacity),
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
@@ -5054,6 +5099,7 @@ impl Window {
             pad: 0,
             bounds,
             content_mask: self.snapped_content_mask(),
+            fade: crate::FadeMask::default(),
             thickness: self.snap_stroke(style.thickness),
             color: style.color.unwrap_or_default().opacity(opacity),
             wavy: false.into(),
@@ -5127,6 +5173,7 @@ impl Window {
                     pad: 0,
                     bounds,
                     content_mask,
+                    fade: crate::FadeMask::default(),
                     color: color.opacity(element_opacity),
                     tile,
                     transformation: TransformationMatrix::unit(),
@@ -5137,6 +5184,7 @@ impl Window {
                     pad: 0,
                     bounds,
                     content_mask,
+                    fade: crate::FadeMask::default(),
                     color: color.opacity(element_opacity),
                     tile,
                     transformation: TransformationMatrix::unit(),
@@ -5220,6 +5268,7 @@ impl Window {
                 bounds,
                 corner_radii: Default::default(),
                 content_mask,
+                fade: crate::FadeMask::default(),
                 tile,
                 opacity,
             });
@@ -5284,6 +5333,7 @@ impl Window {
             pad: 0,
             bounds: final_bounds,
             content_mask,
+            fade: crate::FadeMask::default(),
             color: color.opacity(element_opacity),
             tile,
             transformation,
@@ -5391,6 +5441,7 @@ impl Window {
             grayscale: grayscale.into(),
             bounds: visible_bounds_snapped,
             content_mask,
+            fade: crate::FadeMask::default(),
             corner_radii,
             tile: sub_tile,
             opacity,

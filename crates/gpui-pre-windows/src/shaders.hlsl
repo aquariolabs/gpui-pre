@@ -1,3 +1,4 @@
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 #include "alpha_correction.hlsl"
 
 cbuffer GlobalParams: register(b0) {
@@ -40,6 +41,41 @@ struct Edges {
     float bottom;
     float left;
 };
+
+struct FadeMask {
+    Bounds bounds;
+    Edges edges;
+};
+
+float fade_alpha(float2 position, FadeMask fade) {
+    float alpha = 1.0;
+    float2 origin = fade.bounds.origin;
+    float2 far_corner = origin + fade.bounds.size;
+    if (fade.edges.top > 0.0) {
+        alpha *= saturate((position.y - origin.y) / fade.edges.top);
+    }
+    if (fade.edges.bottom > 0.0) {
+        alpha *= saturate((far_corner.y - position.y) / fade.edges.bottom);
+    }
+    if (fade.edges.left > 0.0) {
+        alpha *= saturate((position.x - origin.x) / fade.edges.left);
+    }
+    if (fade.edges.right > 0.0) {
+        alpha *= saturate((far_corner.x - position.x) / fade.edges.right);
+    }
+    return alpha;
+}
+
+FadeMask fade_from_varyings(float4 bounds, float4 edges) {
+    FadeMask fade;
+    fade.bounds.origin = bounds.xy;
+    fade.bounds.size = bounds.zw;
+    fade.edges.top = edges.x;
+    fade.edges.right = edges.y;
+    fade.edges.bottom = edges.z;
+    fade.edges.left = edges.w;
+    return fade;
+}
 
 struct Hsla {
     float h;
@@ -507,6 +543,7 @@ struct Quad {
     Hsla border_color;
     Corners corner_radii;
     Edges border_widths;
+    FadeMask fade;
 };
 
 struct QuadVertexOutput {
@@ -558,6 +595,7 @@ QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint instance_id: SV_I
 
 float4 quad_fragment(QuadFragmentInput input): SV_Target {
     Quad quad = quads[input.quad_id];
+    float fade = fade_alpha(input.position.xy, quad.fade);
     float4 background_color = gradient_color(quad.background, input.position.xy, quad.bounds,
     input.background_solid, input.background_color0, input.background_color1);
 
@@ -572,7 +610,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
         quad.border_widths.right == 0.0 &&
         quad.border_widths.bottom == 0.0 &&
         unrounded) {
-        return background_color;
+        return background_color * float4(1.0, 1.0, 1.0, fade);
     }
 
     float2 size = quad.bounds.size;
@@ -631,7 +669,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
 
     // Fast path for points that must be part of the background
     if (is_within_inner_straight_border && !is_near_rounded_corner) {
-        return background_color;
+        return background_color * float4(1.0, 1.0, 1.0, fade);
     }
 
     // Signed distance of the point to the outside edge of the quad's border
@@ -844,7 +882,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
                     saturate(antialias_threshold - inner_sdf));
     }
 
-    return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf));
+    return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf) * fade);
 }
 
 /*
@@ -864,6 +902,7 @@ struct Shadow {
     Corners element_corner_radii;
     uint inset;
     uint pad; // align to 8 bytes
+    FadeMask fade;
 };
 
 struct ShadowVertexOutput {
@@ -950,7 +989,7 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
         alpha *= saturate(0.5 - element_distance);
     }
 
-    return input.color * float4(1., 1., 1., alpha);
+    return input.color * float4(1., 1., 1., alpha * fade_alpha(input.position.xy, shadow.fade));
 }
 
 /*
@@ -964,6 +1003,7 @@ struct PathRasterizationSprite {
     float2 st_position;
     Background color;
     Bounds bounds;
+    FadeMask fade;
 };
 
 StructuredBuffer<PathRasterizationSprite> path_rasterization_sprites: register(t1);
@@ -1010,6 +1050,7 @@ float4 path_rasterization_fragment(PathFragmentInput input): SV_Target {
         float distance = f / length(gradient);
         alpha = saturate(0.5 - distance);
     }
+    alpha *= fade_alpha(input.position.xy, sprite.fade);
 
     GradientColor gradient = prepare_gradient_color(
         background.tag, background.color_space, background.solid, background.colors);
@@ -1070,6 +1111,7 @@ struct Underline {
     Hsla color;
     float thickness;
     uint wavy;
+    FadeMask fade;
 };
 
 struct UnderlineVertexOutput {
@@ -1109,6 +1151,7 @@ float4 underline_fragment(UnderlineFragmentInput input): SV_Target {
     const float WAVE_HEIGHT_RATIO = 0.8;
 
     Underline underline = underlines[input.underline_id];
+    float fade = fade_alpha(input.position.xy, underline.fade);
     if (underline.wavy) {
         float half_thickness = underline.thickness * 0.5;
         float2 origin = underline.bounds.origin;
@@ -1125,9 +1168,9 @@ float4 underline_fragment(UnderlineFragmentInput input): SV_Target {
         float distance_from_bottom_border = distance_in_pixels + half_thickness;
         float alpha = saturate(
             0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-        return input.color * float4(1., 1., 1., alpha);
+        return input.color * float4(1., 1., 1., alpha * fade);
     } else {
-        return input.color;
+        return input.color * float4(1., 1., 1., fade);
     }
 }
 
@@ -1145,6 +1188,7 @@ struct MonochromeSprite {
     Bounds content_mask;
     Hsla color;
     TransformationMatrix transformation;
+    FadeMask fade;
 };
 
 struct MonochromeSpriteVertexOutput {
@@ -1152,6 +1196,8 @@ struct MonochromeSpriteVertexOutput {
     float2 tile_position: POSITION;
     nointerpolation float4 color: COLOR;
     float4 clip_distance: SV_ClipDistance;
+    nointerpolation float4 fade_bounds: TEXCOORD1;
+    nointerpolation float4 fade_edges: TEXCOORD2;
 };
 
 struct MonochromeSpriteFragmentInput {
@@ -1159,6 +1205,8 @@ struct MonochromeSpriteFragmentInput {
     float2 tile_position: POSITION;
     nointerpolation float4 color: COLOR;
     float4 clip_distance: SV_ClipDistance;
+    nointerpolation float4 fade_bounds: TEXCOORD1;
+    nointerpolation float4 fade_edges: TEXCOORD2;
 };
 
 StructuredBuffer<MonochromeSprite> mono_sprites: register(t1);
@@ -1178,13 +1226,17 @@ MonochromeSpriteVertexOutput monochrome_sprite_vertex(uint vertex_id: SV_VertexI
     output.tile_position = tile_position;
     output.color = color;
     output.clip_distance = clip_distance;
+    output.fade_bounds = float4(sprite.fade.bounds.origin, sprite.fade.bounds.size);
+    output.fade_edges = float4(sprite.fade.edges.top, sprite.fade.edges.right,
+                               sprite.fade.edges.bottom, sprite.fade.edges.left);
     return output;
 }
 
 float4 monochrome_sprite_fragment(MonochromeSpriteFragmentInput input): SV_Target {
     float sample = t_sprite.Sample(s_sprite, input.tile_position).r;
     float alpha_corrected = apply_contrast_and_gamma_correction(sample, input.color.rgb, grayscale_enhanced_contrast, gamma_ratios);
-    return float4(input.color.rgb, input.color.a * alpha_corrected);
+    float fade = fade_alpha(input.position.xy, fade_from_varyings(input.fade_bounds, input.fade_edges));
+    return float4(input.color.rgb, input.color.a * alpha_corrected * fade);
 }
 
 MonochromeSpriteVertexOutput subpixel_sprite_vertex(uint vertex_id: SV_VertexID, uint instance_id: SV_InstanceID) {
@@ -1200,7 +1252,8 @@ SubpixelSpriteFragmentOutput subpixel_sprite_fragment(MonochromeSpriteFragmentIn
 
     SubpixelSpriteFragmentOutput output;
     output.foreground = float4(input.color.rgb, 1.0f);
-    output.alpha = float4(input.color.a * alpha_corrected, 1.0f);
+    float fade = fade_alpha(input.position.xy, fade_from_varyings(input.fade_bounds, input.fade_edges));
+    output.alpha = float4(input.color.a * alpha_corrected * fade, 1.0f);
     return output;
 }
 
@@ -1219,6 +1272,7 @@ struct PolychromeSprite {
     Bounds bounds;
     Bounds content_mask;
     Corners corner_radii;
+    FadeMask fade;
 };
 
 struct PolychromeSpriteVertexOutput {
@@ -1263,6 +1317,6 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
         float3 grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
         color = float4(grayscale, sample.a);
     }
-    color.a *= sprite.opacity * saturate(0.5 - distance);
+    color.a *= sprite.opacity * saturate(0.5 - distance) * fade_alpha(input.position.xy, sprite.fade);
     return color;
 }

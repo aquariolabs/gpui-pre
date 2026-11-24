@@ -1,3 +1,4 @@
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
 //! Div is the central, reusable element that most GPUI trees will be built from.
 //! It functions as a container for other elements, and provides a number of
 //! useful features for laying out and styling its children as well as binding
@@ -2598,8 +2599,9 @@ impl Interactivity {
                 window.with_element_opacity(style.opacity, |window| {
                     style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
                         window.with_text_style(style.text_style().cloned(), |window| {
-                            window.with_content_mask(
+                            window.with_content_and_fade_mask(
                                 style.overflow_mask(bounds, window.rem_size()),
+                                style.overflow_fade_mask(bounds, window.rem_size()),
                                 |window| {
                                     window.with_tab_group(tab_group, |window| {
                                         // Register the container's own focus handle *inside* its
@@ -4507,6 +4509,56 @@ mod tests {
         MouseMoveEvent, TestAppContext, TouchEvent, TouchId, canvas, util::FluentBuilder as _,
     };
     use std::{cell::Cell, rc::Weak};
+
+    struct OverflowFadeTestView;
+
+    impl Render for OverflowFadeTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(
+                    div()
+                        .h(px(100.))
+                        .bg(crate::blue())
+                        .overflow_hidden()
+                        .overflow_fade_y(px(25.))
+                        .child(div().h(px(300.)).bg(crate::red())),
+                )
+                .child(div().h(px(100.)).bg(crate::green()))
+        }
+    }
+
+    #[gpui::test]
+    fn overflow_fade_fades_what_the_element_clips(cx: &mut TestAppContext) {
+        let window = AnyWindowHandle::from(cx.add_window(|_, _| OverflowFadeTestView));
+
+        cx.update_window(window, |_, window, cx| {
+            window.draw(cx).clear(cx);
+            let scale = window.scale_factor();
+            let quads = &window.rendered_frame.scene.quads;
+            let fade_of = |color: crate::Hsla| {
+                quads
+                    .iter()
+                    .find(|quad| quad.background.solid == color)
+                    .map(|quad| quad.fade)
+                    .expect("every colored element paints a quad")
+            };
+            let clipped = Bounds::new(
+                point(px(0.), px(0.)),
+                size(window.bounds().size.width, px(100.)),
+            );
+            assert_eq!(
+                fade_of(crate::red()),
+                crate::FadeMask {
+                    bounds: clipped.scale(scale),
+                    edges: crate::Edges::vertical(px(25.)).scale(scale),
+                }
+            );
+            assert_eq!(fade_of(crate::blue()), crate::FadeMask::default());
+            assert_eq!(fade_of(crate::green()), crate::FadeMask::default());
+        })
+        .unwrap();
+    }
 
     struct GroupHoverTestView {
         render_count: Rc<Cell<usize>>,

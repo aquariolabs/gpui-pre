@@ -48,6 +48,17 @@ The Metal and HLSL shaders only compile on their own systems, so CI checks them 
 2. Apply the changes below again on top of it, fixing conflicts.
 3. `crates/gpui-pre-apple/vendor/gpui/src` holds copies of gpui-pre's `scene.rs`, `window.rs` and `geometry.rs`, which the Apple build script reads to generate the Metal header. Copy them again from `crates/gpui-pre/src` whenever those files change.
 
+## Changes
+
+### Fading content at clipped edges
+
+`Styled::overflow_fade`, `overflow_fade_x` and `overflow_fade_y` fade an element's children to transparent over the given distance as they reach its clipped edges, like CSS `mask-image: linear-gradient(...)`. A list can then disappear behind a translucent footer instead of being cut off. The names and behavior match [gpui-ce](https://github.com/gpui-ce/gpui-ce), so moving to gpui-ce later keeps the app's code.
+
+- `Window::with_fade_mask` sets the fade while painting, and the scene stamps it on every primitive painted under it: a `FadeMask` with the faded bounds and the fade distance at each edge, in device pixels.
+- The Metal, WGSL (Vulkan, wgpu's Metal and WebGL) and HLSL shaders multiply each pixel's alpha by the fade. Paths fade while they're rasterized, so their antialiased edges fade too.
+- A view reused from the previous frame keeps the fades painted inside it, and takes the current fade where it was painted under the outer one.
+- Only the axes the element clips fade, and the element's own background and border don't.
+
 ## License
 
 Apache-2.0, like gpui-pre. Each crate keeps its `LICENSE-APACHE`, and every file changed here says so in its first lines.
