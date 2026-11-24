@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
 //! Div is the central, reusable element that most GPUI trees will be built from.
 //! It functions as a container for other elements, and provides a number of
 //! useful features for laying out and styling its children as well as binding
@@ -4522,6 +4522,7 @@ mod tests {
                         .bg(crate::blue())
                         .overflow_hidden()
                         .overflow_fade_y(px(25.))
+                        .overflow_fade_blur(px(6.))
                         .child(div().h(px(300.)).bg(crate::red())),
                 )
                 .child(div().h(px(100.)).bg(crate::green()))
@@ -4529,7 +4530,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn overflow_fade_fades_what_the_element_clips(cx: &mut TestAppContext) {
+    fn overflow_fade_fades_and_blurs_what_the_element_clips(cx: &mut TestAppContext) {
         let window = AnyWindowHandle::from(cx.add_window(|_, _| OverflowFadeTestView));
 
         cx.update_window(window, |_, window, cx| {
@@ -4552,6 +4553,8 @@ mod tests {
                 crate::FadeMask {
                     bounds: clipped.scale(scale),
                     edges: crate::Edges::vertical(px(25.)).scale(scale),
+                    blur: px(6.).scale(scale),
+                    ..crate::FadeMask::default()
                 }
             );
             assert_eq!(fade_of(crate::blue()), crate::FadeMask::default());

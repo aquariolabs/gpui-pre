@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
 use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
     DefiniteLength, Display, Edges, Fill, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
@@ -87,6 +87,14 @@ pub trait Styled: Sized {
     /// clearing any fade on the left and right edges.
     fn overflow_fade_y(self, fade: impl Into<AbsoluteLength>) -> Self {
         self.overflow_fade(Edges::vertical(fade.into()))
+    }
+
+    /// Blurs content fading at the top clipped edge, up to `radius` at the edge
+    /// itself and shrinking to none where the top fade ends. Content still fades
+    /// as set by [`Styled::overflow_fade`].
+    fn overflow_fade_blur(mut self, radius: impl Into<AbsoluteLength>) -> Self {
+        self.style().overflow_fade_blur = Some(radius.into());
+        self
     }
 
     /// Set the space to be reserved for rendering the scrollbar.

@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
 /* Functions useful for debugging:
 
 // A heat map color for debugging (blue -> cyan -> green -> yellow -> red).
@@ -120,10 +120,15 @@ struct Edges {
 }
 
 // Fades a primitive to transparent near the edges of `bounds`, over the
-// distances in `edges`. An edge of zero doesn't fade.
+// distances in `edges`. An edge of zero doesn't fade. What fades at the top
+// edge is blurred, by `blur` at the edge and by nothing where the fade ends.
 struct FadeMask {
     bounds: Bounds,
     edges: Edges,
+    blur: f32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 
 struct Hsla {
@@ -195,6 +200,53 @@ fn to_device_position_transformed(unit_vertex: vec2<f32>, bounds: Bounds, transf
 fn to_tile_position(unit_vertex: vec2<f32>, tile: AtlasTile) -> vec2<f32> {
   let atlas_size = vec2<f32>(textureDimensions(t_sprite, 0));
   return (vec2<f32>(tile.bounds.origin) + unit_vertex * vec2<f32>(tile.bounds.size)) / atlas_size;
+}
+
+// Samples the atlas at `uv`, or transparent outside `tile`, so a blur doesn't
+// pick up the neighboring tiles.
+fn sample_tile(uv: vec2<f32>, tile: AtlasTile) -> vec4<f32> {
+    let atlas_size = vec2<f32>(textureDimensions(t_sprite, 0));
+    let texel = uv * atlas_size;
+    let low = vec2<f32>(tile.bounds.origin);
+    let high = low + vec2<f32>(tile.bounds.size);
+    if (any(texel < low) || any(texel > high)) {
+        return vec4<f32>(0.0);
+    }
+    return textureSampleLevel(t_sprite, s_sprite, uv, 0.0);
+}
+
+// Averages 16 samples spread over a disc of `radius` device pixels around `uv`
+// (a golden-angle spiral), with `size` the sprite's size in device pixels.
+fn blurred_tile_sample(uv: vec2<f32>, tile: AtlasTile, size: vec2<f32>, radius: f32) -> vec4<f32> {
+    if (radius < 0.5) {
+        return sample_tile(uv, tile);
+    }
+    let atlas_size = vec2<f32>(textureDimensions(t_sprite, 0));
+    let texel_step = vec2<f32>(tile.bounds.size) / size / atlas_size;
+    var total = sample_tile(uv, tile);
+    for (var i = 0u; i < 16u; i++) {
+        let angle = f32(i) * 2.3999632;
+        let distance = sqrt((f32(i) + 0.5) / 16.0) * radius;
+        total += sample_tile(uv + vec2<f32>(cos(angle), sin(angle)) * distance * texel_step, tile);
+    }
+    return total / 17.0;
+}
+
+// Like `blurred_tile_sample`, for images: averages the colors weighted by their
+// alpha, so transparent samples don't darken the blurred edge.
+fn blurred_image_sample(uv: vec2<f32>, tile: AtlasTile, size: vec2<f32>, radius: f32) -> vec4<f32> {
+    let atlas_size = vec2<f32>(textureDimensions(t_sprite, 0));
+    let texel_step = vec2<f32>(tile.bounds.size) / size / atlas_size;
+    let center = sample_tile(uv, tile);
+    var total = vec4<f32>(center.rgb * center.a, center.a);
+    for (var i = 0u; i < 16u; i++) {
+        let angle = f32(i) * 2.3999632;
+        let distance = sqrt((f32(i) + 0.5) / 16.0) * radius;
+        let sample = sample_tile(uv + vec2<f32>(cos(angle), sin(angle)) * distance * texel_step, tile);
+        total += vec4<f32>(sample.rgb * sample.a, sample.a);
+    }
+    let alpha = total.a / 17.0;
+    return vec4<f32>(total.rgb / max(total.a, 1e-4), alpha);
 }
 
 fn distance_from_clip_rect_impl(position: vec2<f32>, clip_bounds: Bounds) -> vec4<f32> {
@@ -421,18 +473,34 @@ fn fade_alpha(position: vec2<f32>, fade: FadeMask) -> f32 {
     return alpha;
 }
 
-// Sprites without a per-fragment record lookup carry their fade in two flat
-// varyings: the bounds as (origin, size) and the edges as (top, right, bottom, left).
-fn fade_bounds_varying(fade: FadeMask) -> vec4<f32> {
-    return vec4<f32>(fade.bounds.origin, fade.bounds.size);
+// The blur radius at `position`: `blur` at the top edge, shrinking to none
+// where the top fade ends.
+fn fade_blur(position: vec2<f32>, fade: FadeMask) -> f32 {
+    if (fade.blur <= 0.0 || fade.edges.top <= 0.0) {
+        return 0.0;
+    }
+    return fade.blur * (1.0 - saturate((position.y - fade.bounds.origin.y) / fade.edges.top));
 }
 
-fn fade_edges_varying(fade: FadeMask) -> vec4<f32> {
-    return vec4<f32>(fade.edges.top, fade.edges.right, fade.edges.bottom, fade.edges.left);
+// How far a primitive's quad grows on each side so its blur has room to spread.
+fn fade_outset(bounds: Bounds, fade: FadeMask) -> f32 {
+    if (fade.blur <= 0.0 || fade.edges.top <= 0.0) {
+        return 0.0;
+    }
+    if (bounds.origin.y > fade.bounds.origin.y + fade.edges.top) {
+        return 0.0;
+    }
+    return ceil(fade.blur);
 }
 
-fn fade_from_varyings(bounds: vec4<f32>, edges: vec4<f32>) -> FadeMask {
-    return FadeMask(Bounds(bounds.xy, bounds.zw), Edges(edges.x, edges.y, edges.z, edges.w));
+fn outset_bounds(bounds: Bounds, outset: f32) -> Bounds {
+    return Bounds(bounds.origin - vec2<f32>(outset), bounds.size + vec2<f32>(2.0 * outset));
+}
+
+// The point of the original bounds, in its unit square, that a vertex of the
+// grown bounds lands on.
+fn outset_unit_vertex(unit_vertex: vec2<f32>, bounds: Bounds, outset: f32) -> vec2<f32> {
+    return (unit_vertex * (bounds.size + vec2<f32>(2.0 * outset)) - vec2<f32>(outset)) / bounds.size;
 }
 
 struct GradientColor {
@@ -585,7 +653,8 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     let quad = load_quad(instance_id);
 
     var out = QuadVarying();
-    out.position = to_device_position(unit_vertex, quad.bounds);
+    let grown = outset_bounds(quad.bounds, fade_outset(quad.bounds, quad.fade));
+    out.position = to_device_position(unit_vertex, grown);
 
     let gradient = prepare_gradient_color(
         quad.background.tag,
@@ -598,7 +667,7 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     out.background_color1 = gradient.color1;
     out.border_color = hsla_to_rgba(quad.border_color);
     out.quad_id = instance_id;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, quad.bounds, quad.content_mask);
+    out.clip_distances = distance_from_clip_rect(unit_vertex, grown, quad.content_mask);
     return out;
 }
 
@@ -611,6 +680,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
     let quad = load_quad(input.quad_id);
     let fade = fade_alpha(input.position.xy, quad.fade);
+    let softness = max(0.5, fade_blur(input.position.xy, quad.fade));
 
     let background_color = gradient_color(quad.background, input.position.xy, quad.bounds,
         input.background_solid, input.background_color0, input.background_color1);
@@ -625,8 +695,11 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
             quad.border_widths.left == 0.0 &&
             quad.border_widths.right == 0.0 &&
             quad.border_widths.bottom == 0.0 &&
-            unrounded) {
-        return blend_color(background_color, fade);
+            unrounded && softness <= 0.5) {
+        let low = quad.bounds.origin;
+        let high = low + quad.bounds.size;
+        let inside = all(input.position.xy >= low) && all(input.position.xy <= high);
+        return blend_color(background_color, select(0.0, fade, inside));
     }
 
     let size = quad.bounds.size;
@@ -691,7 +764,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // points in an inscribed rectangle, or some other quick linear check.
     // However, that might negatively impact performance in the case of
     // reasonable sizes for rounded corners.
-    if (is_within_inner_straight_border && !is_near_rounded_corner) {
+    if (is_within_inner_straight_border && !is_near_rounded_corner && softness <= 0.5) {
         return blend_color(background_color, fade);
     }
 
@@ -931,7 +1004,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                     saturate(antialias_threshold - inner_sdf));
     }
 
-    return blend_color(color, saturate(antialias_threshold - outer_sdf) * fade);
+    return blend_color(color, saturate((softness - outer_sdf) / (2.0 * softness)) * fade);
 }
 
 // Returns the dash velocity of a corner given the dash velocity of the two
@@ -1275,9 +1348,8 @@ struct MonoSpriteVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) tile_position: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
+    @location(2) @interpolate(flat) sprite_id: u32,
     @location(3) clip_distances: vec4<f32>,
-    @location(4) @interpolate(flat) fade_bounds: vec4<f32>,
-    @location(5) @interpolate(flat) fade_edges: vec4<f32>,
 }
 
 @vertex
@@ -1286,19 +1358,22 @@ fn vs_mono_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     let sprite = load_mono_sprite(instance_id);
 
     var out = MonoSpriteVarying();
-    out.position = to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
+    out.sprite_id = instance_id;
+    let outset = fade_outset(sprite.bounds, sprite.fade);
+    let grown = outset_bounds(sprite.bounds, outset);
+    out.position = to_device_position_transformed(unit_vertex, grown, sprite.transformation);
 
-    out.tile_position = to_tile_position(unit_vertex, sprite.tile);
+    out.tile_position = to_tile_position(outset_unit_vertex(unit_vertex, sprite.bounds, outset), sprite.tile);
     out.color = hsla_to_rgba(sprite.color);
-    out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
-    out.fade_bounds = fade_bounds_varying(sprite.fade);
-    out.fade_edges = fade_edges_varying(sprite.fade);
+    out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, grown, sprite.content_mask, sprite.transformation);
     return out;
 }
 
 @fragment
 fn fs_mono_sprite(input: MonoSpriteVarying) -> @location(0) vec4<f32> {
-    let sample = textureSample(t_sprite, s_sprite, input.tile_position).r;
+    let sprite = load_mono_sprite(input.sprite_id);
+    let radius = fade_blur(input.position.xy, sprite.fade);
+    let sample = blurred_tile_sample(input.tile_position, sprite.tile, sprite.bounds.size, radius).r;
     let alpha_corrected = apply_contrast_and_gamma_correction(sample, input.color.rgb, gamma_params.grayscale_enhanced_contrast, gamma_params.gamma_ratios);
 
     // Alpha clip after using the derivatives.
@@ -1306,7 +1381,7 @@ fn fs_mono_sprite(input: MonoSpriteVarying) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    let fade = fade_alpha(input.position.xy, fade_from_varyings(input.fade_bounds, input.fade_edges));
+    let fade = fade_alpha(input.position.xy, sprite.fade);
     return blend_color(input.color, alpha_corrected * fade);
 }
 
@@ -1338,23 +1413,38 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     let sprite = load_poly_sprite(instance_id);
 
     var out = PolySpriteVarying();
-    out.position = to_device_position(unit_vertex, sprite.bounds);
-    out.tile_position = to_tile_position(unit_vertex, sprite.tile);
+    let outset = fade_outset(sprite.bounds, sprite.fade);
+    let grown = outset_bounds(sprite.bounds, outset);
+    out.position = to_device_position(unit_vertex, grown);
+    out.tile_position = to_tile_position(outset_unit_vertex(unit_vertex, sprite.bounds, outset), sprite.tile);
     out.sprite_id = instance_id;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, sprite.bounds, sprite.content_mask);
+    out.clip_distances = distance_from_clip_rect(unit_vertex, grown, sprite.content_mask);
     return out;
 }
 
 @fragment
 fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
-    let sample = textureSample(t_sprite, s_sprite, input.tile_position);
+    let sprite = load_poly_sprite(input.sprite_id);
+    let radius = fade_blur(input.position.xy, sprite.fade);
+    let blurred = radius >= 0.5;
+    var sample: vec4<f32>;
+    if (blurred) {
+        sample = blurred_image_sample(input.tile_position, sprite.tile, sprite.bounds.size, radius);
+    } else {
+        sample = textureSampleLevel(t_sprite, s_sprite, input.tile_position, 0.0);
+    }
     // Alpha clip after using the derivatives.
     if (any(input.clip_distances < vec4<f32>(0.0))) {
         return vec4<f32>(0.0);
     }
 
-    let sprite = load_poly_sprite(input.sprite_id);
     let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+    var corner = saturate(0.5 - distance);
+    if (blurred) {
+        // The blurred sample already fades out past the bounds, so the corners
+        // only cut what they would hide under the same blur.
+        corner = min(1.0, saturate((radius - distance) / (2.0 * radius)) / max(sample.a, 1e-4));
+    }
 
     var color = sample;
     if (sprite.grayscale != 0u) {
@@ -1362,7 +1452,7 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
         color = vec4<f32>(vec3<f32>(grayscale), sample.a);
     }
     let fade = fade_alpha(input.position.xy, sprite.fade);
-    return blend_color(color, sprite.opacity * saturate(0.5 - distance) * fade);
+    return blend_color(color, sprite.opacity * corner * fade);
 }
 
 // --- surfaces --- //

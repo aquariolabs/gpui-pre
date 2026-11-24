@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
 #include "alpha_correction.hlsl"
 
 cbuffer GlobalParams: register(b0) {
@@ -45,6 +45,10 @@ struct Edges {
 struct FadeMask {
     Bounds bounds;
     Edges edges;
+    float blur;
+    uint pad0;
+    uint pad1;
+    uint pad2;
 };
 
 float fade_alpha(float2 position, FadeMask fade) {
@@ -66,15 +70,35 @@ float fade_alpha(float2 position, FadeMask fade) {
     return alpha;
 }
 
-FadeMask fade_from_varyings(float4 bounds, float4 edges) {
-    FadeMask fade;
-    fade.bounds.origin = bounds.xy;
-    fade.bounds.size = bounds.zw;
-    fade.edges.top = edges.x;
-    fade.edges.right = edges.y;
-    fade.edges.bottom = edges.z;
-    fade.edges.left = edges.w;
-    return fade;
+// The blur radius at `position`: `blur` at the top edge, shrinking to none
+// where the top fade ends.
+float fade_blur(float2 position, FadeMask fade) {
+    if (fade.blur <= 0.0 || fade.edges.top <= 0.0) {
+        return 0.0;
+    }
+    return fade.blur * (1.0 - saturate((position.y - fade.bounds.origin.y) / fade.edges.top));
+}
+
+// How far a primitive's quad grows on each side so its blur has room to spread.
+float fade_outset(Bounds bounds, FadeMask fade) {
+    if (fade.blur <= 0.0 || fade.edges.top <= 0.0) {
+        return 0.0;
+    }
+    if (bounds.origin.y > fade.bounds.origin.y + fade.edges.top) {
+        return 0.0;
+    }
+    return ceil(fade.blur);
+}
+
+Bounds outset_bounds(Bounds bounds, float outset) {
+    Bounds grown;
+    grown.origin = bounds.origin - outset;
+    grown.size = bounds.size + 2.0 * outset;
+    return grown;
+}
+
+float2 outset_unit_vertex(float2 unit_vertex, Bounds bounds, float outset) {
+    return (unit_vertex * (bounds.size + 2.0 * outset) - outset) / bounds.size;
 }
 
 struct Hsla {
@@ -295,6 +319,60 @@ float2 to_tile_position(float2 unit_vertex, AtlasTile tile) {
     float2 atlas_size;
     t_sprite.GetDimensions(atlas_size.x, atlas_size.y);
     return (float2(tile.bounds.origin) + unit_vertex * float2(tile.bounds.size)) / atlas_size;
+}
+
+// Samples the atlas at `uv`, or transparent outside `tile`, so a blur doesn't
+// pick up the neighboring tiles.
+float4 sample_tile(float2 uv, AtlasTile tile) {
+    float2 atlas_size;
+    t_sprite.GetDimensions(atlas_size.x, atlas_size.y);
+    float2 texel = uv * atlas_size;
+    float2 low = float2(tile.bounds.origin);
+    float2 high = low + float2(tile.bounds.size);
+    if (any(texel < low) || any(texel > high)) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    return t_sprite.SampleLevel(s_sprite, uv, 0.0);
+}
+
+float2 blur_texel_step(AtlasTile tile, Bounds bounds) {
+    float2 atlas_size;
+    t_sprite.GetDimensions(atlas_size.x, atlas_size.y);
+    return float2(tile.bounds.size) / bounds.size / atlas_size;
+}
+
+// The i-th of 16 points spread over a disc of `radius` (a golden-angle spiral).
+float2 blur_offset(uint i, float radius) {
+    float angle = float(i) * 2.3999632;
+    float distance = sqrt((float(i) + 0.5) / 16.0) * radius;
+    return float2(cos(angle), sin(angle)) * distance;
+}
+
+float4 blurred_tile_sample(float2 uv, AtlasTile tile, Bounds bounds, float radius) {
+    if (radius < 0.5) {
+        return sample_tile(uv, tile);
+    }
+    float2 texel_step = blur_texel_step(tile, bounds);
+    float4 total = sample_tile(uv, tile);
+    [unroll]
+    for (uint i = 0; i < 16; i++) {
+        total += sample_tile(uv + blur_offset(i, radius) * texel_step, tile);
+    }
+    return total / 17.0;
+}
+
+// Like `blurred_tile_sample`, for images: averages the colors weighted by their
+// alpha, so transparent samples don't darken the blurred edge.
+float4 blurred_image_sample(float2 uv, AtlasTile tile, Bounds bounds, float radius) {
+    float2 texel_step = blur_texel_step(tile, bounds);
+    float4 center = sample_tile(uv, tile);
+    float4 total = float4(center.rgb * center.a, center.a);
+    [unroll]
+    for (uint i = 0; i < 16; i++) {
+        float4 sample = sample_tile(uv + blur_offset(i, radius) * texel_step, tile);
+        total += float4(sample.rgb * sample.a, sample.a);
+    }
+    return float4(total.rgb / max(total.a, 1e-4), total.a / 17.0);
 }
 
 // Selects corner radius based on quadrant.
@@ -571,7 +649,8 @@ QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint instance_id: SV_I
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     uint quad_id = batch_start_index + instance_id;
     Quad quad = quads[quad_id];
-    float4 device_position = to_device_position(unit_vertex, quad.bounds);
+    Bounds grown = outset_bounds(quad.bounds, fade_outset(quad.bounds, quad.fade));
+    float4 device_position = to_device_position(unit_vertex, grown);
 
     GradientColor gradient = prepare_gradient_color(
         quad.background.tag,
@@ -579,7 +658,7 @@ QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint instance_id: SV_I
         quad.background.solid,
         quad.background.colors
     );
-    float4 clip_distance = distance_from_clip_rect(unit_vertex, quad.bounds, quad.content_mask);
+    float4 clip_distance = distance_from_clip_rect(unit_vertex, grown, quad.content_mask);
     float4 border_color = hsla_to_rgba(quad.border_color);
 
     QuadVertexOutput output;
@@ -596,6 +675,7 @@ QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint instance_id: SV_I
 float4 quad_fragment(QuadFragmentInput input): SV_Target {
     Quad quad = quads[input.quad_id];
     float fade = fade_alpha(input.position.xy, quad.fade);
+    float softness = max(0.5, fade_blur(input.position.xy, quad.fade));
     float4 background_color = gradient_color(quad.background, input.position.xy, quad.bounds,
     input.background_solid, input.background_color0, input.background_color1);
 
@@ -609,8 +689,11 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
         quad.border_widths.left == 0.0 &&
         quad.border_widths.right == 0.0 &&
         quad.border_widths.bottom == 0.0 &&
-        unrounded) {
-        return background_color * float4(1.0, 1.0, 1.0, fade);
+        unrounded && softness <= 0.5) {
+        float2 low = quad.bounds.origin;
+        float2 high = low + quad.bounds.size;
+        bool inside = all(input.position.xy >= low) && all(input.position.xy <= high);
+        return background_color * float4(1.0, 1.0, 1.0, inside ? fade : 0.0);
     }
 
     float2 size = quad.bounds.size;
@@ -668,7 +751,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
         straight_border_inner_corner_to_point.y < -antialias_threshold;
 
     // Fast path for points that must be part of the background
-    if (is_within_inner_straight_border && !is_near_rounded_corner) {
+    if (is_within_inner_straight_border && !is_near_rounded_corner && softness <= 0.5) {
         return background_color * float4(1.0, 1.0, 1.0, fade);
     }
 
@@ -882,7 +965,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
                     saturate(antialias_threshold - inner_sdf));
     }
 
-    return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf) * fade);
+    return color * float4(1.0, 1.0, 1.0, saturate((softness - outer_sdf) / (2.0 * softness)) * fade);
 }
 
 /*
@@ -1196,8 +1279,7 @@ struct MonochromeSpriteVertexOutput {
     float2 tile_position: POSITION;
     nointerpolation float4 color: COLOR;
     float4 clip_distance: SV_ClipDistance;
-    nointerpolation float4 fade_bounds: TEXCOORD1;
-    nointerpolation float4 fade_edges: TEXCOORD2;
+    nointerpolation uint sprite_id: TEXCOORD1;
 };
 
 struct MonochromeSpriteFragmentInput {
@@ -1205,8 +1287,7 @@ struct MonochromeSpriteFragmentInput {
     float2 tile_position: POSITION;
     nointerpolation float4 color: COLOR;
     float4 clip_distance: SV_ClipDistance;
-    nointerpolation float4 fade_bounds: TEXCOORD1;
-    nointerpolation float4 fade_edges: TEXCOORD2;
+    nointerpolation uint sprite_id: TEXCOORD1;
 };
 
 StructuredBuffer<MonochromeSprite> mono_sprites: register(t1);
@@ -1215,10 +1296,12 @@ MonochromeSpriteVertexOutput monochrome_sprite_vertex(uint vertex_id: SV_VertexI
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     uint sprite_id = batch_start_index + instance_id;
     MonochromeSprite sprite = mono_sprites[sprite_id];
+    float outset = fade_outset(sprite.bounds, sprite.fade);
+    Bounds grown = outset_bounds(sprite.bounds, outset);
     float4 device_position =
-        to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
-    float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
-    float2 tile_position = to_tile_position(unit_vertex, sprite.tile);
+        to_device_position_transformed(unit_vertex, grown, sprite.transformation);
+    float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, grown, sprite.content_mask, sprite.transformation);
+    float2 tile_position = to_tile_position(outset_unit_vertex(unit_vertex, sprite.bounds, outset), sprite.tile);
     float4 color = hsla_to_rgba(sprite.color);
 
     MonochromeSpriteVertexOutput output;
@@ -1226,16 +1309,16 @@ MonochromeSpriteVertexOutput monochrome_sprite_vertex(uint vertex_id: SV_VertexI
     output.tile_position = tile_position;
     output.color = color;
     output.clip_distance = clip_distance;
-    output.fade_bounds = float4(sprite.fade.bounds.origin, sprite.fade.bounds.size);
-    output.fade_edges = float4(sprite.fade.edges.top, sprite.fade.edges.right,
-                               sprite.fade.edges.bottom, sprite.fade.edges.left);
+    output.sprite_id = sprite_id;
     return output;
 }
 
 float4 monochrome_sprite_fragment(MonochromeSpriteFragmentInput input): SV_Target {
-    float sample = t_sprite.Sample(s_sprite, input.tile_position).r;
+    MonochromeSprite sprite = mono_sprites[input.sprite_id];
+    float radius = fade_blur(input.position.xy, sprite.fade);
+    float sample = blurred_tile_sample(input.tile_position, sprite.tile, sprite.bounds, radius).r;
     float alpha_corrected = apply_contrast_and_gamma_correction(sample, input.color.rgb, grayscale_enhanced_contrast, gamma_ratios);
-    float fade = fade_alpha(input.position.xy, fade_from_varyings(input.fade_bounds, input.fade_edges));
+    float fade = fade_alpha(input.position.xy, sprite.fade);
     return float4(input.color.rgb, input.color.a * alpha_corrected * fade);
 }
 
@@ -1244,7 +1327,9 @@ MonochromeSpriteVertexOutput subpixel_sprite_vertex(uint vertex_id: SV_VertexID,
 }
 
 SubpixelSpriteFragmentOutput subpixel_sprite_fragment(MonochromeSpriteFragmentInput input) {
-    float3 sample = t_sprite.Sample(s_sprite, input.tile_position).rgb;
+    MonochromeSprite sprite = mono_sprites[input.sprite_id];
+    float radius = fade_blur(input.position.xy, sprite.fade);
+    float3 sample = blurred_tile_sample(input.tile_position, sprite.tile, sprite.bounds, radius).rgb;
     if (is_bgr) {
         sample = sample.bgr;
     }
@@ -1252,7 +1337,7 @@ SubpixelSpriteFragmentOutput subpixel_sprite_fragment(MonochromeSpriteFragmentIn
 
     SubpixelSpriteFragmentOutput output;
     output.foreground = float4(input.color.rgb, 1.0f);
-    float fade = fade_alpha(input.position.xy, fade_from_varyings(input.fade_bounds, input.fade_edges));
+    float fade = fade_alpha(input.position.xy, sprite.fade);
     output.alpha = float4(input.color.a * alpha_corrected * fade, 1.0f);
     return output;
 }
@@ -1294,10 +1379,12 @@ PolychromeSpriteVertexOutput polychrome_sprite_vertex(uint vertex_id: SV_VertexI
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     uint sprite_id = batch_start_index + instance_id;
     PolychromeSprite sprite = poly_sprites[sprite_id];
-    float4 device_position = to_device_position(unit_vertex, sprite.bounds);
-    float4 clip_distance = distance_from_clip_rect(unit_vertex, sprite.bounds,
+    float outset = fade_outset(sprite.bounds, sprite.fade);
+    Bounds grown = outset_bounds(sprite.bounds, outset);
+    float4 device_position = to_device_position(unit_vertex, grown);
+    float4 clip_distance = distance_from_clip_rect(unit_vertex, grown,
                                                     sprite.content_mask);
-    float2 tile_position = to_tile_position(unit_vertex, sprite.tile);
+    float2 tile_position = to_tile_position(outset_unit_vertex(unit_vertex, sprite.bounds, outset), sprite.tile);
 
     PolychromeSpriteVertexOutput output;
     output.position = device_position;
@@ -1309,14 +1396,22 @@ PolychromeSpriteVertexOutput polychrome_sprite_vertex(uint vertex_id: SV_VertexI
 
 float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Target {
     PolychromeSprite sprite = poly_sprites[input.sprite_id];
-    float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
+    float radius = fade_blur(input.position.xy, sprite.fade);
+    bool blurred = radius >= 0.5;
+    float4 sample = blurred
+        ? blurred_image_sample(input.tile_position, sprite.tile, sprite.bounds, radius)
+        : t_sprite.Sample(s_sprite, input.tile_position);
     float distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+    float corner = saturate(0.5 - distance);
+    if (blurred) {
+        corner = min(1.0, saturate((radius - distance) / (2.0 * radius)) / max(sample.a, 1e-4));
+    }
 
     float4 color = sample;
     if (sprite.grayscale != 0u) {
         float3 grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
         color = float4(grayscale, sample.a);
     }
-    color.a *= sprite.opacity * saturate(0.5 - distance) * fade_alpha(input.position.xy, sprite.fade);
+    color.a *= sprite.opacity * corner * fade_alpha(input.position.xy, sprite.fade);
     return color;
 }

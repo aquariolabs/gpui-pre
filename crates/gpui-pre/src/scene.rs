@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
 // todo("windows"): remove
 #![cfg_attr(windows, allow(dead_code))]
 
@@ -40,7 +40,8 @@ impl From<bool> for PaddedBool32 {
 /// Fades everything painted under it to transparent near the edges of `bounds`.
 ///
 /// Each edge distance is how far from that edge the fade reaches; zero leaves
-/// the edge sharp. The renderers multiply each pixel's alpha by the fade.
+/// the edge sharp. The renderers multiply each pixel's alpha by the fade, and
+/// blur what fades at the top edge, up to `blur` at the edge itself.
 #[derive(Default, Debug, Copy, Clone, PartialEq)]
 #[repr(C)]
 pub struct FadeMask {
@@ -48,6 +49,10 @@ pub struct FadeMask {
     pub bounds: Bounds<ScaledPixels>,
     /// How far in from each edge the fade reaches.
     pub edges: Edges<ScaledPixels>,
+    /// The blur radius at the top edge, shrinking to none where the top fade ends.
+    pub blur: ScaledPixels,
+    #[doc(hidden)]
+    pub pad: [u32; 3],
 }
 
 #[derive(Default)]
@@ -1039,6 +1044,7 @@ mod tests {
                 bottom: ScaledPixels(side / 4.),
                 ..Edges::default()
             },
+            ..FadeMask::default()
         }
     }
 
