@@ -1,5 +1,5 @@
 // Modified for gpui-pre (snapshot of zed@d2a4fb6): adapt device queues and sRGB detection to wgpu 30.0.1.
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
 use crate::{CompositorGpuHint, DeviceErrorState, WgpuAtlas, WgpuContext};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
@@ -2839,6 +2839,7 @@ mod tests {
                 bottom: (FADED_SIZE / 2.0).into(),
                 ..Edges::default()
             },
+            ..FadeMask::default()
         };
         scene.insert_primitive(primitive);
         scene.fade = FadeMask::default();
@@ -3034,6 +3035,193 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
+    const BLURRED_WIDTH: f32 = 64.0;
+
+    #[cfg(target_os = "linux")]
+    const BLURRED_HEIGHT: f32 = 128.0;
+
+    #[cfg(target_os = "linux")]
+    fn blurred_area() -> Bounds<ScaledPixels> {
+        Bounds {
+            origin: Point::default(),
+            size: Size {
+                width: BLURRED_WIDTH.into(),
+                height: BLURRED_HEIGHT.into(),
+            },
+        }
+    }
+
+    /// The 16 px wide column, from x = 24 to 40, that the blur tests paint.
+    #[cfg(target_os = "linux")]
+    fn blurred_column() -> Bounds<ScaledPixels> {
+        Bounds {
+            origin: Point {
+                x: 24.0.into(),
+                y: 0.0.into(),
+            },
+            size: Size {
+                width: 16.0.into(),
+                height: BLURRED_HEIGHT.into(),
+            },
+        }
+    }
+
+    /// Renders `primitive` under a fade that reaches down the whole 64 by 128 px
+    /// image from its top edge, blurring by 8 px at the top and by nothing at the bottom.
+    #[cfg(target_os = "linux")]
+    fn render_blurred(
+        renderer: &mut WgpuHeadlessRenderer,
+        primitive: impl Into<gpui::Primitive>,
+    ) -> anyhow::Result<image::RgbaImage> {
+        let mut scene = Scene::default();
+        scene.fade = FadeMask {
+            bounds: blurred_area(),
+            edges: Edges {
+                top: BLURRED_HEIGHT.into(),
+                ..Edges::default()
+            },
+            blur: 8.0.into(),
+            ..FadeMask::default()
+        };
+        scene.insert_primitive(primitive);
+        scene.fade = FadeMask::default();
+        scene.finish();
+        renderer.render_scene_to_image(
+            &scene,
+            device_size(BLURRED_WIDTH as i32, BLURRED_HEIGHT as i32),
+        )
+    }
+
+    /// A quarter of the way down, the blur is 6 px, so red spills 2 px past the
+    /// column's left edge; near the bottom it is under half a pixel, so none does.
+    #[cfg(target_os = "linux")]
+    fn assert_blurred_toward_top(image: &image::RgbaImage) {
+        let red = |x: u32, y: u32| f32::from(image.get_pixel(x, y).0[0]);
+        let spill = red(22, 32) / red(32, 32);
+        assert!(spill > 0.2 && spill < 0.6, "blurred edge {spill}");
+        assert!(
+            red(32, 124) > 200.0,
+            "column near the bottom {}",
+            red(32, 124)
+        );
+        assert!(red(22, 124) < 2.0, "sharp edge {}", red(22, 124));
+        assert!(red(4, 32) < 2.0, "past the blur {}", red(4, 32));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_blurs_quads_at_the_top_of_the_fade() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let column = blurred_column();
+        let mut quad = solid_quad(
+            column.origin.x.0,
+            column.origin.y.0,
+            column.size.width.0,
+            column.size.height.0,
+            gpui::red(),
+        );
+        quad.content_mask.bounds = blurred_area();
+        assert_blurred_toward_top(&render_blurred(&mut renderer, quad)?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_blurs_monochrome_sprites_at_the_top_of_the_fade() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let column = blurred_column();
+        let (width, height) = (column.size.width.0 as i32, column.size.height.0 as i32);
+        let coverage = vec![u8::MAX; (width * height) as usize];
+        let tile = renderer
+            .sprite_atlas()
+            .get_or_insert_with(
+                AtlasKey::Glyph(RenderGlyphParams {
+                    font_id: FontId(0),
+                    glyph_id: GlyphId(1),
+                    font_size: px(BLURRED_HEIGHT),
+                    subpixel_variant: Point::default(),
+                    scale_factor: 1.0,
+                    is_emoji: false,
+                    subpixel_rendering: false,
+                    dilation: 0,
+                }),
+                &mut || {
+                    Ok(Some((
+                        device_size(width, height),
+                        Cow::Borrowed(coverage.as_slice()),
+                    )))
+                },
+            )?
+            .expect("the atlas should hold the coverage mask");
+        let sprite = MonochromeSprite {
+            order: 0,
+            pad: 0,
+            tile,
+            bounds: column,
+            content_mask: ContentMask {
+                bounds: Bounds {
+                    origin: Point::default(),
+                    size: Size {
+                        width: BLURRED_WIDTH.into(),
+                        height: BLURRED_HEIGHT.into(),
+                    },
+                },
+            },
+            color: gpui::red(),
+            transformation: TransformationMatrix::unit(),
+            fade: FadeMask::default(),
+        };
+        assert_blurred_toward_top(&render_blurred(&mut renderer, sprite)?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_blurs_polychrome_sprites_at_the_top_of_the_fade() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let column = blurred_column();
+        let (width, height) = (column.size.width.0 as i32, column.size.height.0 as i32);
+        let bgra_red = [0, 0, u8::MAX, u8::MAX];
+        let pixels = bgra_red.repeat((width * height) as usize);
+        let tile = renderer
+            .sprite_atlas()
+            .get_or_insert_with(
+                AtlasKey::Image(RenderImageParams {
+                    image_id: ImageId(1),
+                    frame_index: 0,
+                }),
+                &mut || {
+                    Ok(Some((
+                        device_size(width, height),
+                        Cow::Borrowed(pixels.as_slice()),
+                    )))
+                },
+            )?
+            .expect("the atlas should hold the image");
+        let sprite = PolychromeSprite {
+            order: 0,
+            pad: 0,
+            tile,
+            grayscale: false.into(),
+            opacity: 1.0,
+            bounds: column,
+            content_mask: ContentMask {
+                bounds: Bounds {
+                    origin: Point::default(),
+                    size: Size {
+                        width: BLURRED_WIDTH.into(),
+                        height: BLURRED_HEIGHT.into(),
+                    },
+                },
+            },
+            corner_radii: Corners::default(),
+            fade: FadeMask::default(),
+        };
+        assert_blurred_toward_top(&render_blurred(&mut renderer, sprite)?);
+        Ok(())
+    }
+
     #[test]
     fn webgl_shader_is_valid_wgsl_without_storage_buffers() {
         assert!(!WEBGL_SHADERS.contains("var<storage"));
@@ -3062,14 +3250,14 @@ mod tests {
 
     #[test]
     fn webgl_record_sizes_match_shader_word_strides() {
-        assert_eq!(std::mem::size_of::<Quad>(), 48 * 4);
-        assert_eq!(std::mem::size_of::<Shadow>(), 36 * 4);
-        assert_eq!(std::mem::size_of::<PathRasterizationVertex>(), 34 * 4);
+        assert_eq!(std::mem::size_of::<Quad>(), 52 * 4);
+        assert_eq!(std::mem::size_of::<Shadow>(), 40 * 4);
+        assert_eq!(std::mem::size_of::<PathRasterizationVertex>(), 38 * 4);
         assert_eq!(std::mem::size_of::<PathSprite>(), 4 * 4);
-        assert_eq!(std::mem::size_of::<Underline>(), 24 * 4);
-        assert_eq!(std::mem::size_of::<MonochromeSprite>(), 36 * 4);
-        assert_eq!(std::mem::size_of::<SubpixelSprite>(), 36 * 4);
-        assert_eq!(std::mem::size_of::<PolychromeSprite>(), 32 * 4);
+        assert_eq!(std::mem::size_of::<Underline>(), 28 * 4);
+        assert_eq!(std::mem::size_of::<MonochromeSprite>(), 40 * 4);
+        assert_eq!(std::mem::size_of::<SubpixelSprite>(), 40 * 4);
+        assert_eq!(std::mem::size_of::<PolychromeSprite>(), 36 * 4);
     }
 
     #[test]
@@ -3156,6 +3344,8 @@ mod tests {
                     bottom: 40.0.into(),
                     left: 41.0.into(),
                 },
+                blur: 42.0.into(),
+                pad: [43, 44, 45],
             },
         };
 
@@ -3212,6 +3402,10 @@ mod tests {
                 39.0_f32.to_bits(),
                 40.0_f32.to_bits(),
                 41.0_f32.to_bits(),
+                42.0_f32.to_bits(),
+                43,
+                44,
+                45,
             ]
         );
     }

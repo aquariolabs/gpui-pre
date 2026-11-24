@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
 #[cfg(feature = "profiler")]
 use crate::DebugFrameOverlayMode;
 #[cfg(any(feature = "inspector", debug_assertions))]
@@ -4433,27 +4433,29 @@ impl Window {
     }
 
     /// Runs `f` inside `mask`, like [`Window::with_content_mask`], and also under
-    /// [`Window::with_fade_mask`] when `fade` holds a rectangle and its edge distances.
+    /// [`Window::with_fade_mask`] when `fade` holds a rectangle, its edge distances and top blur.
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn with_content_and_fade_mask<R>(
         &mut self,
         mask: Option<ContentMask<Pixels>>,
-        fade: Option<(Bounds<Pixels>, Edges<Pixels>)>,
+        fade: Option<(Bounds<Pixels>, Edges<Pixels>, Pixels)>,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.with_content_mask(mask, |window| match fade {
-            Some((bounds, edges)) => window.with_fade_mask(bounds, edges, f),
+            Some((bounds, edges, blur)) => window.with_fade_mask(bounds, edges, blur, f),
             None => f(window),
         })
     }
 
     /// Fades everything painted inside `f` to transparent near the edges of `bounds`,
-    /// over the distance given for each edge. This method should only be called as
-    /// part of the paint phase of element drawing.
+    /// over the distance given for each edge, blurring what fades at the top edge
+    /// up to `blur`. This method should only be called as part of the paint phase
+    /// of element drawing.
     pub fn with_fade_mask<R>(
         &mut self,
         bounds: Bounds<Pixels>,
         edges: Edges<Pixels>,
+        blur: Pixels,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.invalidator.debug_assert_paint();
@@ -4461,6 +4463,8 @@ impl Window {
         let fade = crate::FadeMask {
             bounds: bounds.scale(scale),
             edges: edges.scale(scale),
+            blur: blur.scale(scale),
+            ..crate::FadeMask::default()
         };
         let outer = std::mem::replace(&mut self.next_frame.scene.fade, fade);
         let result = f(self);

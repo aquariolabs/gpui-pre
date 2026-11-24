@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
 @group(1) @binding(0) var t_instances: texture_2d<u32>;
 
 // Each texel of `t_instances` packs four 32-bit words of instance data. Most
@@ -94,7 +94,14 @@ fn read_edges(cursor: ptr<function, InstanceCursor>) -> Edges {
 }
 
 fn read_fade(cursor: ptr<function, InstanceCursor>) -> FadeMask {
-    return FadeMask(read_bounds(cursor), read_edges(cursor));
+    return FadeMask(
+        read_bounds(cursor),
+        read_edges(cursor),
+        read_f32(cursor),
+        read_word(cursor),
+        read_word(cursor),
+        read_word(cursor),
+    );
 }
 
 fn read_color_stop(cursor: ptr<function, InstanceCursor>) -> LinearColorStop {
@@ -143,7 +150,7 @@ fn read_transformation(cursor: ptr<function, InstanceCursor>) -> TransformationM
 fn load_quad(instance_id: u32) -> Quad {
     // Keep this fixed-layout decoder explicit. Some WebGL shader compilers fail
     // to optimize the cursor's branches and dynamic vector indexing for quads.
-    let first_texel_index = instance_id * 12u;
+    let first_texel_index = instance_id * 13u;
     let width = textureDimensions(t_instances).x;
     let texel0 = fetch_instance_texel(first_texel_index, width);
     let texel1 = fetch_instance_texel(first_texel_index + 1u, width);
@@ -157,6 +164,7 @@ fn load_quad(instance_id: u32) -> Quad {
     let texel9 = fetch_instance_texel(first_texel_index + 9u, width);
     let texel10 = fetch_instance_texel(first_texel_index + 10u, width);
     let texel11 = fetch_instance_texel(first_texel_index + 11u, width);
+    let texel12 = fetch_instance_texel(first_texel_index + 12u, width);
 
     let values0 = bitcast<vec4<f32>>(texel0);
     let values1 = bitcast<vec4<f32>>(texel1);
@@ -199,12 +207,16 @@ fn load_quad(instance_id: u32) -> Quad {
         FadeMask(
             Bounds(values10.xy, values10.zw),
             Edges(values11.x, values11.y, values11.z, values11.w),
+            bitcast<f32>(texel12.x),
+            texel12.y,
+            texel12.z,
+            texel12.w,
         ),
     );
 }
 
 fn load_shadow(instance_id: u32) -> Shadow {
-    var cursor = instance_cursor(instance_id * 36u);
+    var cursor = instance_cursor(instance_id * 40u);
     return Shadow(
         read_word(&cursor),
         read_f32(&cursor),
@@ -221,7 +233,7 @@ fn load_shadow(instance_id: u32) -> Shadow {
 }
 
 fn load_path_vertex(vertex_id: u32) -> PathRasterizationVertex {
-    var cursor = instance_cursor(vertex_id * 34u);
+    var cursor = instance_cursor(vertex_id * 38u);
     return PathRasterizationVertex(
         read_vec2_f32(&cursor),
         read_vec2_f32(&cursor),
@@ -237,7 +249,7 @@ fn load_path_sprite(instance_id: u32) -> PathSprite {
 }
 
 fn load_underline(instance_id: u32) -> Underline {
-    var cursor = instance_cursor(instance_id * 24u);
+    var cursor = instance_cursor(instance_id * 28u);
     return Underline(
         read_word(&cursor),
         read_word(&cursor),
@@ -251,7 +263,7 @@ fn load_underline(instance_id: u32) -> Underline {
 }
 
 fn load_mono_sprite(instance_id: u32) -> MonochromeSprite {
-    var cursor = instance_cursor(instance_id * 36u);
+    var cursor = instance_cursor(instance_id * 40u);
     return MonochromeSprite(
         read_word(&cursor),
         read_word(&cursor),
@@ -265,7 +277,7 @@ fn load_mono_sprite(instance_id: u32) -> MonochromeSprite {
 }
 
 fn load_poly_sprite(instance_id: u32) -> PolychromeSprite {
-    var cursor = instance_cursor(instance_id * 32u);
+    var cursor = instance_cursor(instance_id * 36u);
     return PolychromeSprite(
         read_word(&cursor),
         read_word(&cursor),

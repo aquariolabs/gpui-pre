@@ -59,6 +59,14 @@ The Metal and HLSL shaders only compile on their own systems, so CI checks them 
 - A view reused from the previous frame keeps the fades painted inside it, and takes the current fade where it was painted under the outer one.
 - Only the axes the element clips fade, and the element's own background and border don't.
 
+### Blurring what fades at the top
+
+`Styled::overflow_fade_blur` blurs content as it fades at the top clipped edge: by the given radius at the edge itself, shrinking to none where the top fade ends. A list scrolling under a translucent search field then goes soft and transparent instead of staying sharp to the last pixel. It isn't a backdrop blur: it blurs the element's own content, not what's behind it.
+
+- `FadeMask` carries the radius as `blur`, so the record sizes grow by 16 bytes.
+- Quads, monochrome, subpixel and polychrome sprites near the fade's top grow by the radius so the blur has room. Quads soften their edges by the radius; sprites average 16 atlas samples over a disc, and images weight those samples by their alpha. Shadows, underlines and paths only fade.
+- The WebGL decoders read the longer records, and the wgpu tests render the blur on quads and on both kinds of sprites.
+
 ## License
 
 Apache-2.0, like gpui-pre. Each crate keeps its `LICENSE-APACHE`, and every file changed here says so in its first lines.

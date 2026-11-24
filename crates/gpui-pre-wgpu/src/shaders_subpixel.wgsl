@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
 // --- subpixel sprites --- //
 
 struct SubpixelSprite {
@@ -17,9 +17,8 @@ struct SubpixelSpriteOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) tile_position: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
+    @location(2) @interpolate(flat) sprite_id: u32,
     @location(3) clip_distances: vec4<f32>,
-    @location(4) @interpolate(flat) fade_bounds: vec4<f32>,
-    @location(5) @interpolate(flat) fade_edges: vec4<f32>,
 }
 
 struct SubpixelSpriteFragmentOutput {
@@ -33,18 +32,21 @@ fn vs_subpixel_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_i
     let sprite = b_subpixel_sprites[instance_id];
 
     var out = SubpixelSpriteOutput();
-    out.position = to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
-    out.tile_position = to_tile_position(unit_vertex, sprite.tile);
+    out.sprite_id = instance_id;
+    let outset = fade_outset(sprite.bounds, sprite.fade);
+    let grown = outset_bounds(sprite.bounds, outset);
+    out.position = to_device_position_transformed(unit_vertex, grown, sprite.transformation);
+    out.tile_position = to_tile_position(outset_unit_vertex(unit_vertex, sprite.bounds, outset), sprite.tile);
     out.color = hsla_to_rgba(sprite.color);
-    out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
-    out.fade_bounds = fade_bounds_varying(sprite.fade);
-    out.fade_edges = fade_edges_varying(sprite.fade);
+    out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, grown, sprite.content_mask, sprite.transformation);
     return out;
 }
 
 @fragment
 fn fs_subpixel_sprite(input: SubpixelSpriteOutput) -> SubpixelSpriteFragmentOutput {
-    var sample = textureSample(t_sprite, s_sprite, input.tile_position).rgb;
+    let sprite = b_subpixel_sprites[input.sprite_id];
+    let radius = fade_blur(input.position.xy, sprite.fade);
+    var sample = blurred_tile_sample(input.tile_position, sprite.tile, sprite.bounds.size, radius).rgb;
     if (gamma_params.is_bgr != 0u) {
         sample = sample.bgr;
     }
@@ -57,7 +59,7 @@ fn fs_subpixel_sprite(input: SubpixelSpriteOutput) -> SubpixelSpriteFragmentOutp
 
     var out = SubpixelSpriteFragmentOutput();
     out.foreground = vec4<f32>(input.color.rgb, 1.0);
-    let fade = fade_alpha(input.position.xy, fade_from_varyings(input.fade_bounds, input.fade_edges));
+    let fade = fade_alpha(input.position.xy, sprite.fade);
     out.alpha = vec4<f32>(input.color.a * alpha_corrected * fade, 1.0);
     return out;
 }

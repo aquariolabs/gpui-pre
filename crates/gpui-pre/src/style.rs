@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
 use std::{
     hash::{Hash, Hasher},
     iter, mem,
@@ -192,6 +192,8 @@ pub struct Style {
     /// How far in from each edge clipped by `overflow` the content fades to transparent.
     #[refineable]
     pub overflow_fade: Edges<AbsoluteLength>,
+    /// How much content fading at the top clipped edge is blurred at the edge itself.
+    pub overflow_fade_blur: AbsoluteLength,
     /// How much space (in points) should be reserved for the scrollbars of `Overflow::Scroll` and `Overflow::Auto` nodes.
     pub scrollbar_width: AbsoluteLength,
     /// Whether both x and y axis should be scrollable at the same time.
@@ -688,13 +690,13 @@ impl Style {
         }
     }
 
-    /// The rectangle and edge distances over which content clipped by `overflow` fades
-    /// to transparent, or `None` when no clipped edge fades.
+    /// The rectangle, edge distances and top blur over which content clipped by
+    /// `overflow` fades to transparent, or `None` when no clipped edge fades.
     pub fn overflow_fade_mask(
         &self,
         bounds: Bounds<Pixels>,
         rem_size: Pixels,
-    ) -> Option<(Bounds<Pixels>, Edges<Pixels>)> {
+    ) -> Option<(Bounds<Pixels>, Edges<Pixels>, Pixels)> {
         let mask = self.overflow_mask(bounds, rem_size)?;
         let mut edges = self.overflow_fade.to_pixels(rem_size);
         if self.overflow.x == Overflow::Visible {
@@ -708,7 +710,12 @@ impl Style {
         if edges == Edges::default() {
             return None;
         }
-        Some((mask.bounds, edges))
+        let blur = if edges.top > Pixels::ZERO {
+            self.overflow_fade_blur.to_pixels(rem_size)
+        } else {
+            Pixels::ZERO
+        };
+        Some((mask.bounds, edges, blur))
     }
 
     /// Paints the background of an element styled with this style.
@@ -805,6 +812,7 @@ impl Default for Style {
                 y: Overflow::Visible,
             },
             overflow_fade: Edges::default(),
+            overflow_fade_blur: AbsoluteLength::default(),
             allow_concurrent_scroll: false,
             restrict_scroll_to_axis: false,
             scrollbar_width: AbsoluteLength::default(),
@@ -1390,6 +1398,7 @@ mod tests {
                     bottom: px(32.),
                     left: px(0.),
                 },
+                px(0.),
             ))
         );
 
@@ -1404,7 +1413,24 @@ mod tests {
                     bottom: px(32.),
                     left: px(4.),
                 },
+                px(0.),
             ))
+        );
+
+        style.overflow_fade_blur = px(6.).into();
+        assert_eq!(
+            style
+                .overflow_fade_mask(bounds, rem_size)
+                .map(|fade| fade.2),
+            Some(px(6.))
+        );
+
+        style.overflow_fade.top = px(0.).into();
+        assert_eq!(
+            style
+                .overflow_fade_mask(bounds, rem_size)
+                .map(|fade| fade.2),
+            Some(px(0.))
         );
 
         style.overflow_fade = Edges::default();
