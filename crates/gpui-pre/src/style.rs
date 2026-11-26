@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur. Squircle corners (CornerShape).
 use std::{
     hash::{Hash, Hasher},
     iter, mem,
@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ContentMask, Corners,
+    AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, CornerShape, ContentMask, Corners,
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
     PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun, Window, black, phi,
@@ -289,6 +289,9 @@ pub struct Style {
 
     /// The border style of this element
     pub border_style: BorderStyle,
+
+    /// The curve of this element's rounded corners
+    pub corner_shape: CornerShape,
 
     /// The radius of the corners of this element
     #[refineable]
@@ -761,14 +764,17 @@ impl Style {
                 None => Hsla::default(),
             };
             border_color.a = 0.;
-            window.paint_quad(quad(
-                bounds,
-                corner_radii,
-                background_color.unwrap_or_default(),
-                Edges::default(),
-                border_color,
-                self.border_style,
-            ));
+            window.paint_shaped_quad(
+                quad(
+                    bounds,
+                    corner_radii,
+                    background_color.unwrap_or_default(),
+                    Edges::default(),
+                    border_color,
+                    self.border_style,
+                ),
+                self.corner_shape,
+            );
         }
 
         window.paint_inset_shadows(bounds, corner_radii, &self.box_shadow);
@@ -779,14 +785,17 @@ impl Style {
             let border_widths = self.border_widths.to_pixels(rem_size);
             let mut background = self.border_color.unwrap_or_default();
             background.a = 0.;
-            window.paint_quad(quad(
-                bounds,
-                corner_radii,
-                background,
-                border_widths,
-                self.border_color.unwrap_or_default(),
-                self.border_style,
-            ));
+            window.paint_shaped_quad(
+                quad(
+                    bounds,
+                    corner_radii,
+                    background,
+                    border_widths,
+                    self.border_color.unwrap_or_default(),
+                    self.border_style,
+                ),
+                self.corner_shape,
+            );
         }
 
         #[cfg(debug_assertions)]
@@ -840,6 +849,7 @@ impl Default for Style {
             background: None,
             border_color: None,
             border_style: BorderStyle::default(),
+            corner_shape: CornerShape::default(),
             corner_radii: Corners::default(),
             box_shadow: Default::default(),
             text: TextStyleRefinement::default(),

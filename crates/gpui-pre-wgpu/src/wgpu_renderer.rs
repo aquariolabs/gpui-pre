@@ -2653,7 +2653,7 @@ mod tests {
         RenderGlyphParams, RenderImageParams, Scene, TransformationMatrix, point, px,
     };
     use gpui::{
-        BorderStyle, ColorSpace, ContentMask, Corners, Edges, Hsla, MonochromeSprite,
+        BorderStyle, ColorSpace, ContentMask, CornerShape, Corners, Edges, Hsla, MonochromeSprite,
         PolychromeSprite, Quad, Shadow, Size, SubpixelSprite, Underline, linear_color_stop,
         linear_gradient,
     };
@@ -2690,6 +2690,8 @@ mod tests {
             corner_radii: Corners::default(),
             border_widths: Edges::default(),
             fade: FadeMask::default(),
+            corner_shape: CornerShape::Round,
+            corner_pad: [0; 3],
         }
     }
 
@@ -2729,6 +2731,35 @@ mod tests {
         assert_pixel(&image, 24, 16, RED);
         assert_pixel(&image, 40, 16, BLUE);
         assert_pixel(&image, 56, 16, BLUE);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn squircle_corners_cover_more_of_the_corner_than_round_ones() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let mut scene = Scene::default();
+        let radius = Corners::all(ScaledPixels(24.0));
+        scene.insert_primitive(Quad {
+            corner_radii: radius,
+            ..solid_quad(0.0, 0.0, 64.0, 64.0, gpui::red())
+        });
+        scene.insert_primitive(Quad {
+            corner_radii: radius,
+            corner_shape: CornerShape::Squircle,
+            ..solid_quad(64.0, 0.0, 64.0, 64.0, gpui::blue())
+        });
+        scene.finish();
+
+        let image = renderer.render_scene_to_image(&scene, device_size(128, 64))?;
+        assert_pixel(&image, 1, 1, BLACK);
+        assert_pixel(&image, 5, 5, BLACK);
+        assert_pixel(&image, 9, 9, RED);
+        assert_pixel(&image, 65, 1, BLACK);
+        assert_pixel(&image, 69, 5, BLUE);
+        assert_pixel(&image, 122, 58, BLUE);
+        assert_pixel(&image, 126, 62, BLACK);
+        assert_pixel(&image, 96, 0, BLUE);
         Ok(())
     }
 
@@ -3250,7 +3281,7 @@ mod tests {
 
     #[test]
     fn webgl_record_sizes_match_shader_word_strides() {
-        assert_eq!(std::mem::size_of::<Quad>(), 52 * 4);
+        assert_eq!(std::mem::size_of::<Quad>(), 56 * 4);
         assert_eq!(std::mem::size_of::<Shadow>(), 40 * 4);
         assert_eq!(std::mem::size_of::<PathRasterizationVertex>(), 38 * 4);
         assert_eq!(std::mem::size_of::<PathSprite>(), 4 * 4);
@@ -3347,6 +3378,8 @@ mod tests {
                 blur: 42.0.into(),
                 pad: [43, 44, 45],
             },
+            corner_shape: CornerShape::Squircle,
+            corner_pad: [46, 47, 48],
         };
 
         let bytes = unsafe { WgpuRendererCore::instance_bytes(std::slice::from_ref(&quad)) };
@@ -3406,6 +3439,10 @@ mod tests {
                 43,
                 44,
                 45,
+                1,
+                46,
+                47,
+                48,
             ]
         );
     }

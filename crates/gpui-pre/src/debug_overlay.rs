@@ -1,10 +1,10 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade. Squircle corners (CornerShape).
 //! A developer overlay that paints frame-time statistics directly into the
 //! scene, bypassing layout, text, and view invalidation entirely (to avoid
 //! infinitely triggering new frames).
 
 use crate::{
-    BorderStyle, Bounds, ContentMask, Corners, Edges, Hsla, Pixels, Quad, ScaledPixels, Scene,
+    BorderStyle, Bounds, CornerShape, ContentMask, Corners, Edges, Hsla, Pixels, Quad, ScaledPixels, Scene,
     Size, point, rgba, size, transparent_black,
 };
 use std::{collections::VecDeque, time::Duration};
@@ -227,6 +227,8 @@ fn solid_quad(
         border_color: transparent_black(),
         corner_radii: Corners::default(),
         border_widths: Edges::default(),
+        corner_shape: CornerShape::Round,
+        corner_pad: [0; 3],
     }
 }
 
