@@ -73,6 +73,9 @@ jobs:
       - name: Compile the shaders
         run: cargo check -p gpui-pre-apple
 
+      - name: Check the macOS platform
+        run: cargo check -p gpui-pre-macos
+
   windows:
     name: HLSL shaders (Windows)
     runs-on: windows-latest
