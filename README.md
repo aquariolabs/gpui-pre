@@ -8,6 +8,7 @@ This isn't a GitHub fork: gpui-pre has no repository of its own, and forking zed
 | --- | --- |
 | `crates/gpui-pre` | The framework |
 | `crates/gpui-pre-apple` | Metal renderer for macOS and iOS |
+| `crates/gpui-pre-macos` | The macOS platform: windows, events, menus |
 | `crates/gpui-pre-wgpu` | wgpu renderer for Linux and the web |
 | `crates/gpui-pre-windows` | DirectX renderer for Windows |
 | `crates/util-macros` | Stands in for Zed's `util_macros` so gpui-pre's own tests build. Not published. |
@@ -22,6 +23,7 @@ Point Cargo at a commit of this repository in the app's workspace `Cargo.toml`:
 [patch.crates-io]
 gpui-pre = { git = "https://github.com/aquariolabs/gpui-pre", rev = "<commit>" }
 gpui-pre-apple = { git = "https://github.com/aquariolabs/gpui-pre", rev = "<commit>" }
+gpui-pre-macos = { git = "https://github.com/aquariolabs/gpui-pre", rev = "<commit>" }
 gpui-pre-wgpu = { git = "https://github.com/aquariolabs/gpui-pre", rev = "<commit>" }
 gpui-pre-windows = { git = "https://github.com/aquariolabs/gpui-pre", rev = "<commit>" }
 ```
