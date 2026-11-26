@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur. Squircle corners (CornerShape).
 @group(1) @binding(0) var t_instances: texture_2d<u32>;
 
 // Each texel of `t_instances` packs four 32-bit words of instance data. Most
@@ -150,7 +150,7 @@ fn read_transformation(cursor: ptr<function, InstanceCursor>) -> TransformationM
 fn load_quad(instance_id: u32) -> Quad {
     // Keep this fixed-layout decoder explicit. Some WebGL shader compilers fail
     // to optimize the cursor's branches and dynamic vector indexing for quads.
-    let first_texel_index = instance_id * 13u;
+    let first_texel_index = instance_id * 14u;
     let width = textureDimensions(t_instances).x;
     let texel0 = fetch_instance_texel(first_texel_index, width);
     let texel1 = fetch_instance_texel(first_texel_index + 1u, width);
@@ -165,6 +165,7 @@ fn load_quad(instance_id: u32) -> Quad {
     let texel10 = fetch_instance_texel(first_texel_index + 10u, width);
     let texel11 = fetch_instance_texel(first_texel_index + 11u, width);
     let texel12 = fetch_instance_texel(first_texel_index + 12u, width);
+    let texel13 = fetch_instance_texel(first_texel_index + 13u, width);
 
     let values0 = bitcast<vec4<f32>>(texel0);
     let values1 = bitcast<vec4<f32>>(texel1);
@@ -212,6 +213,10 @@ fn load_quad(instance_id: u32) -> Quad {
             texel12.z,
             texel12.w,
         ),
+        texel13.x,
+        texel13.y,
+        texel13.z,
+        texel13.w,
     );
 }
 

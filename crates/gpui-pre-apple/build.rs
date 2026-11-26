@@ -58,6 +58,7 @@ mod apple_build {
             "UnderlineInputIndex".into(),
             "Quad".into(),
             "BorderStyle".into(),
+            "CornerShape".into(),
             "SpriteInputIndex".into(),
             "MonochromeSprite".into(),
             "PolychromeSprite".into(),

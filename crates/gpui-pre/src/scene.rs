@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur, and squircle corners.
 // todo("windows"): remove
 #![cfg_attr(windows, allow(dead_code))]
 
@@ -599,6 +599,9 @@ pub struct Quad {
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
     pub fade: FadeMask,
+    pub corner_shape: CornerShape,
+    #[doc(hidden)]
+    pub corner_pad: [u32; 3],
 }
 
 impl From<Quad> for Primitive {
@@ -660,6 +663,17 @@ pub enum BorderStyle {
     Solid = 0,
     /// A dashed border.
     Dashed = 1,
+}
+
+/// The curve of a quad's rounded corners.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[repr(C)]
+pub enum CornerShape {
+    /// Circular arcs, as CSS `border-radius` draws them.
+    #[default]
+    Round = 0,
+    /// Superellipse arcs with exponent 4, as CSS `corner-shape: squircle` draws them.
+    Squircle = 1,
 }
 
 /// A data type representing a 2 dimensional transformation that can be applied to an element.

@@ -1,6 +1,6 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur. Squircle corners (CornerShape).
 use crate::{
-    self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
+    self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CornerShape, CursorStyle,
     DefiniteLength, Display, Edges, Fill, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
     FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, Hsla, JustifyContent, Length,
     SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
@@ -535,6 +535,12 @@ pub trait Styled: Sized {
     /// Sets the border style of the element.
     fn border_dashed(mut self) -> Self {
         self.style().border_style = Some(BorderStyle::Dashed);
+        self
+    }
+
+    /// Draws the element's rounded corners as squircles, like CSS `corner-shape: squircle`.
+    fn corner_squircle(mut self) -> Self {
+        self.style().corner_shape = Some(CornerShape::Squircle);
         self
     }
 

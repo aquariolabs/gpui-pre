@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur. Squircle corners (CornerShape).
 #include <metal_stdlib>
 #include <simd/simd.h>
 
@@ -29,6 +29,7 @@ float pick_corner_radius(float2 center_to_point, Corners_ScaledPixels corner_rad
 float quad_sdf(float2 point, Bounds_ScaledPixels bounds,
                Corners_ScaledPixels corner_radii);
 float quad_sdf_impl(float2 center_to_point, float corner_radius);
+float corner_sdf_impl(float2 corner_center_to_point, float corner_radius, CornerShape corner_shape);
 float gaussian(float x, float sigma);
 float2 erf(float2 x);
 float blur_along_x(float x, float y, float sigma, float corner,
@@ -291,7 +292,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
   }
 
   // Signed distance of the point to the outside edge of the quad's border
-  float outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
+  float outer_sdf = corner_sdf_impl(corner_center_to_point, corner_radius, quad.corner_shape);
 
   // Approximate signed distance of the point to the inside edge of the quad's
   // border. It is negative outside this edge (within the border), and
@@ -1220,6 +1221,30 @@ float quad_sdf_impl(float2 corner_center_to_point, float corner_radius) {
 
         return signed_distance_to_inset_quad - corner_radius;
     }
+}
+
+float squircle_sdf_impl(float2 corner_center_to_point, float corner_radius) {
+    if (corner_radius == 0.0) {
+        return max(corner_center_to_point.x, corner_center_to_point.y);
+    }
+    float2 outside = max(float2(0.0), corner_center_to_point);
+    float inside = min(0.0, max(corner_center_to_point.x, corner_center_to_point.y));
+    float2 squared = outside * outside;
+    float2 fourth = squared * squared;
+    float norm = sqrt(sqrt(fourth.x + fourth.y));
+    if (norm == 0.0) {
+        return inside - corner_radius;
+    }
+    float2 sixth = fourth * squared;
+    float gradient = sqrt(sixth.x + sixth.y) / (norm * norm * norm);
+    return inside + (norm - corner_radius) / gradient;
+}
+
+float corner_sdf_impl(float2 corner_center_to_point, float corner_radius, CornerShape corner_shape) {
+    if (corner_shape == CornerShape_Squircle) {
+        return squircle_sdf_impl(corner_center_to_point, corner_radius);
+    }
+    return quad_sdf_impl(corner_center_to_point, corner_radius);
 }
 
 // A standard gaussian function, used for weighting samples

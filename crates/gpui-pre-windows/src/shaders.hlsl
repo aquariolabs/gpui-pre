@@ -1,4 +1,4 @@
-// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur.
+// Modified for aquariolabs/gpui-pre: fade masks for Styled::overflow_fade and its top blur. Squircle corners (CornerShape).
 #include "alpha_correction.hlsl"
 
 cbuffer GlobalParams: register(b0) {
@@ -418,6 +418,30 @@ float quad_sdf_impl(float2 corner_center_to_point, float corner_radius) {
     }
 }
 
+float squircle_sdf_impl(float2 corner_center_to_point, float corner_radius) {
+    if (corner_radius == 0.0) {
+        return max(corner_center_to_point.x, corner_center_to_point.y);
+    }
+    float2 outside = max(float2(0.0, 0.0), corner_center_to_point);
+    float inside = min(0.0, max(corner_center_to_point.x, corner_center_to_point.y));
+    float2 squared = outside * outside;
+    float2 fourth = squared * squared;
+    float norm = sqrt(sqrt(fourth.x + fourth.y));
+    if (norm == 0.0) {
+        return inside - corner_radius;
+    }
+    float2 sixth = fourth * squared;
+    float gradient = sqrt(sixth.x + sixth.y) / (norm * norm * norm);
+    return inside + (norm - corner_radius) / gradient;
+}
+
+float corner_sdf_impl(float2 corner_center_to_point, float corner_radius, uint corner_shape) {
+    if (corner_shape == 1) {
+        return squircle_sdf_impl(corner_center_to_point, corner_radius);
+    }
+    return quad_sdf_impl(corner_center_to_point, corner_radius);
+}
+
 float quad_sdf(float2 pt, Bounds bounds, Corners corner_radii) {
     float2 half_size = bounds.size / 2.;
     float2 center = bounds.origin + half_size;
@@ -622,6 +646,10 @@ struct Quad {
     Corners corner_radii;
     Edges border_widths;
     FadeMask fade;
+    uint corner_shape;
+    uint corner_pad0;
+    uint corner_pad1;
+    uint corner_pad2;
 };
 
 struct QuadVertexOutput {
@@ -756,7 +784,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
     }
 
     // Signed distance of the point to the outside edge of the quad's border
-    float outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
+    float outer_sdf = corner_sdf_impl(corner_center_to_point, corner_radius, quad.corner_shape);
 
     // Approximate signed distance of the point to the inside edge of the quad's
     // border. It is negative outside this edge (within the border), and
