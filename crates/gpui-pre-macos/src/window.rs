@@ -1408,7 +1408,7 @@ impl Drop for MacWindow {
         // a cycle the delegate/`frame_source` teardown below cannot break. Drop
         // the adapter here so the native view, its `CAMetalLayer` and the
         // renderer's command queue are actually released with the window.
-        drop(this.accesskit_adapter.take());
+        let accesskit_adapter = this.accesskit_adapter.take();
         this.renderer.destroy();
         let window = this.native_window;
         let sheet_parent = this.sheet_parent.take();
@@ -1423,6 +1423,7 @@ impl Drop for MacWindow {
         // A delivery task queued by `report_visibility` may still run after the
         // GPUI window is gone; without a callback it has nothing to notify.
         this.visibility_callback.take();
+        let released = this.background_executor.timer(RELEASE_CLOSED_WINDOW_AFTER);
         this.foreground_executor
             .spawn(async move {
                 unsafe {
@@ -1432,19 +1433,18 @@ impl Drop for MacWindow {
                     let _: Bool =
                         msg_send![window, makeFirstResponder: ptr::null_mut::<AnyObject>()];
                     let _: () = msg_send![window, close];
-                    let _: () = msg_send![
-                        window,
-                        performSelector: sel!(autorelease),
-                        withObject: ptr::null_mut::<AnyObject>(),
-                        afterDelay: RELEASE_CLOSED_WINDOW_AFTER
-                    ];
+                }
+                released.await;
+                drop(accesskit_adapter);
+                unsafe {
+                    let _: *mut AnyObject = msg_send![window, autorelease];
                 }
             })
             .detach();
     }
 }
 
-const RELEASE_CLOSED_WINDOW_AFTER: f64 = 1.0;
+const RELEASE_CLOSED_WINDOW_AFTER: Duration = Duration::from_secs(1);
 
 /// Calls `f` if the window is not closed.
 ///
