@@ -1429,13 +1429,22 @@ impl Drop for MacWindow {
                     if let Some(parent) = sheet_parent {
                         let _: () = msg_send![parent, endSheet: window];
                     }
+                    let _: Bool =
+                        msg_send![window, makeFirstResponder: ptr::null_mut::<AnyObject>()];
                     let _: () = msg_send![window, close];
-                    let _: *mut AnyObject = msg_send![window, autorelease];
+                    let _: () = msg_send![
+                        window,
+                        performSelector: sel!(autorelease),
+                        withObject: ptr::null_mut::<AnyObject>(),
+                        afterDelay: RELEASE_CLOSED_WINDOW_AFTER
+                    ];
                 }
             })
             .detach();
     }
 }
+
+const RELEASE_CLOSED_WINDOW_AFTER: f64 = 1.0;
 
 /// Calls `f` if the window is not closed.
 ///
